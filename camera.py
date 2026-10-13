@@ -1,25 +1,70 @@
+import threading
+import time
+
 import cv2
+
 from config import CAMERA_INDEX, FRAME_WIDTH, FRAME_HEIGHT
 
 
 class Camera:
+    """
+    方案 7：后台线程读帧。
+
+    推理慢时相机缓冲会积压，串行 read() 拿到的是几百毫秒前的旧画面。
+    改为后台线程持续 grab() 并只保留最新一帧，主循环 retrieve() 时
+    永远拿到最近一帧，感知延迟从「一个推理周期」降到「一帧」。
+    """
+
     def __init__(self):
         self.cap = cv2.VideoCapture(CAMERA_INDEX)
 
         if not self.cap.isOpened():
-            raise RuntimeError("Cannot open camera. Try changing CAMERA_INDEX in config.py.")
+            raise RuntimeError(
+                "Cannot open camera. Try changing CAMERA_INDEX in config.py."
+            )
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
-    def read(self):
-        ret, frame = self.cap.read()
+        self.lock = threading.Lock()
+        self.frame = None
+        self.stopped = False
 
-        if not ret:
-            return None
+        self.thread = threading.Thread(target=self._update, daemon=True)
+        self.thread.start()
 
-        frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
-        return frame
+    def _update(self):
+        """后台线程：持续读帧，只保留最新一帧。"""
+        while not self.stopped:
+            ret, frame = self.cap.read()
+
+            if not ret:
+                # 读帧失败：短暂等待后重试，多次失败则视为相机断开
+                with self.lock:
+                    self.frame = None
+                continue
+
+            frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+
+            with self.lock:
+                self.frame = frame
+
+    def read(self, timeout=2.0):
+        """取最新一帧；启动后还没读到首帧或相机断开时返回 None。"""
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            with self.lock:
+                frame = self.frame
+
+            if frame is not None:
+                return frame
+
+            time.sleep(0.01)
+
+        return None
 
     def release(self):
+        self.stopped = True
+        self.thread.join(timeout=1.0)
         self.cap.release()
