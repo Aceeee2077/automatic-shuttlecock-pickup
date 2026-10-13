@@ -169,6 +169,8 @@ def main():
                     last_command = "STOP"
                 else:
                     decision = {"action": "COLLECTING"}
+                    # 捡球期间不发行驶指令，但需要发心跳防止 Arduino 看门狗误停车
+                    robot.heartbeat()
 
             else:
                 if decision["action"] == "COLLECT":

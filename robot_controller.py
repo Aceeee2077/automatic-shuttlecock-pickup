@@ -49,6 +49,11 @@ class RobotController:
     def collect_off(self):
         self.send_command("COLLECT_OFF")
 
+    def heartbeat(self):
+        """看门狗心跳：不改变当前动作，仅刷新 Arduino 端看门狗计时。"""
+        if self.use_serial and self.serial_conn:
+            self.serial_conn.write(b"PING\n")
+
     def close(self):
         if self.serial_conn:
             self.serial_conn.close()

@@ -9,8 +9,14 @@
   TURN_RIGHT
   STOP
   COLLECT_ON
-  COLLECT_OFF
-  SPEED <left_pwm> <right_pwm>   比例控制差速行驶（0~255）
+    COLLECT_OFF
+    SPEED <left_pwm> <right_pwm>   比例控制差速行驶（0~255）
+    PING                           仅刷新看门狗，不改变动作（捡球期间发）
+
+  串口看门狗（方案 6）：
+  超过 WATCHDOG_TIMEOUT_MS 没收到任何指令就自动停车，
+  防止 Python 端崩溃/卡死/拔线后小车失控。
+  任何指令都会刷新看门狗（SPEED 每帧发送，天然作为心跳）。
 */
 
 const int LEFT_MOTOR_IN1 = 5;   // PWM
@@ -22,7 +28,11 @@ const int RIGHT_MOTOR_IN2 = 10; // PWM
 const int COLLECT_MOTOR_IN1 = 3; // PWM
 const int COLLECT_MOTOR_IN2 = 4; // 数字脚（捡球电机只做开关，不用 PWM）
 
+// 看门狗超时时间：超过该毫秒数没收到指令就停车
+const unsigned long WATCHDOG_TIMEOUT_MS = 500;
+
 String command = "";
+unsigned long lastCmdTime = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -44,6 +54,9 @@ void loop() {
   if (Serial.available() > 0) {
     command = Serial.readStringUntil('\n');
     command.trim();
+
+    // 收到指令，刷新看门狗计时
+    lastCmdTime = millis();
 
     if (command.startsWith("SPEED ")) {
       // 格式：SPEED <left_pwm> <right_pwm>
@@ -71,7 +84,16 @@ void loop() {
       collectOn();
     } else if (command == "COLLECT_OFF") {
       collectOff();
+    } else if (command == "PING") {
+      // 仅刷新看门狗计时，不改变任何动作
     }
+  }
+
+  // 串口看门狗：超时未收到指令，立即停车（含捡球电机）
+  if (lastCmdTime != 0 && millis() - lastCmdTime > WATCHDOG_TIMEOUT_MS) {
+    stopRobot();
+    collectOff();
+    lastCmdTime = 0;  // 置 0 避免每圈重复执行停车（上电后未收到过指令时看门狗不生效）
   }
 }
 
