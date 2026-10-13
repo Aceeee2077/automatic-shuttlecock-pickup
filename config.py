@@ -154,3 +154,53 @@ MAX_ACCEL = 1200.0
 
 # 是否启用加速度限幅，False 退回无限制（立即到达目标速度）
 USE_ACCEL_LIMIT = True
+
+# =========================
+# 障碍物检测与避障（方案 19）
+# =========================
+
+# 启用障碍物检测（需模型含 person/bag/chair 类别或第二个轻量模型）
+USE_OBSTACLE_AVOID = False
+
+# 障碍物模型路径；为 None 时复用羽毛球模型（模型需含障碍物类别）
+OBSTACLE_MODEL_PATH = None
+
+# 视为障碍物的类别名（COCO 类别名）
+OBSTACLE_CLASSES = ("person", "backpack", "handbag", "chair")
+
+# 障碍物检测置信度阈值
+OBSTACLE_CONF_THRESHOLD = 0.5
+
+# 障碍物投影距离小于该值（米，地面模式）或框面积超过该值（像素模式
+# 近似近距）时避障
+OBSTACLE_STOP_DISTANCE_M = 0.5
+OBSTACLE_AREA_NEAR = 80000
+
+# 障碍物持续遮挡超时（秒），超过后放弃该目标进入搜索
+OBSTACLE_BLOCK_TIMEOUT = 8.0
+
+# =========================
+# 电量监测（方案 20）
+# =========================
+
+# 启用电池电压监测（需固件支持 BATT 上报）
+USE_BATTERY_MONITOR = False
+
+# 低电压报警阈值（mV）
+BATTERY_LOW_MV = 10500
+
+# 严重低电压阈值（mV），低于该值禁止启动新任务并强制停车
+BATTERY_CRITICAL_MV = 10000
+
+# =========================
+# Web 远程监控（方案 22）
+# =========================
+
+# 启用 Web 监控服务（浏览器打开 http://<ip>:8000）
+USE_WEB_SERVER = False
+
+# 监控服务端口
+WEB_SERVER_PORT = 8000
+
+# JPEG 推流质量（1~100）
+WEB_JPEG_QUALITY = 70

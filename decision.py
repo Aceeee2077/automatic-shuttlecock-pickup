@@ -19,7 +19,11 @@ from config import (
     MULTI_BALL,
     NEXT_TARGET_MIN_SEP,
     MAX_ACCEL,
-    USE_ACCEL_LIMIT
+    USE_ACCEL_LIMIT,
+    USE_OBSTACLE_AVOID,
+    OBSTACLE_STOP_DISTANCE_M,
+    OBSTACLE_AREA_NEAR,
+    OBSTACLE_BLOCK_TIMEOUT
 )
 
 from ground_projection import GroundProjection
@@ -28,7 +32,8 @@ from ground_projection import GroundProjection
 class DecisionMaker:
     """
     方案 3（比例控制）+ 方案 4（连续丢帧判定）+ 方案 9（地面投影闭环）
-    + 方案 10（多球调度）+ 方案 11（捡球确认）+ 方案 12（加速度限幅）。
+    + 方案 10（多球调度）+ 方案 11（捡球确认）+ 方案 12（加速度限幅）
+    + 方案 19（障碍物避障）。
 
     两种模式（USE_GROUND_PROJECTION 切换）：
     - 像素模式：水平偏差像素 + 面积估距（方案 3 原逻辑）
@@ -100,11 +105,69 @@ class DecisionMaker:
         self.current_right = 0
         self.last_drive_time = None
 
+        # ---- 方案 19：障碍物遮挡状态 ----
+        # 障碍物首次挡住目标的时刻（None 表示未遮挡）
+        self.blocked_since = None
+
     def estimate_distance(self, area):
         """像素模式：用框面积反推相对距离：distance ≈ C / sqrt(area)"""
         if area <= 0:
             return float("inf")
         return DIST_PER_SQRT_AREA / math.sqrt(area)
+
+    # ---- 方案 19：障碍物避障 ----
+
+    def check_obstacle(self, target, obstacle):
+        """检查障碍物是否挡在行驶路径上。
+
+        返回 "clear" / "blocked" / "giveup"：
+        - clear: 无障碍或障碍物不在目标与机器人之间
+        - blocked: 障碍物挡路但未超时，应停车等待或减速
+        - giveup: 持续遮挡超过 OBSTACLE_BLOCK_TIMEOUT，放弃该目标
+        """
+        if not USE_OBSTACLE_AVOID or obstacle is None:
+            self.blocked_since = None
+            return "clear"
+
+        if target is None:
+            self.blocked_since = None
+            return "clear"
+
+        # 障碍物水平方向在目标附近（挡在机器人与目标之间）：
+        # 障碍物中心与目标中心水平距离小于两者宽度一半之和
+        obs_cx = obstacle["x"] + obstacle["w"] / 2.0
+        tgt_cx = target["x"] + target["w"] / 2.0
+        horizontal_overlap = (
+            abs(obs_cx - tgt_cx)
+            < (obstacle["w"] + target["w"]) / 2.0
+        )
+
+        # 障碍物是否足够近：
+        # 地面模式用投影距离；像素模式用面积近似（面积大 = 近）
+        if self.use_ground:
+            bearing, obs_dist = self.projection.bearing_and_distance(
+                obstacle["x"], obstacle["w"], obstacle["y"], obstacle["h"]
+            )
+            near = obs_dist <= OBSTACLE_STOP_DISTANCE_M
+        else:
+            near = obstacle["area"] >= OBSTACLE_AREA_NEAR
+
+        if not (horizontal_overlap and near):
+            self.blocked_since = None
+            return "clear"
+
+        # 障碍物挡路：开始计时
+        now = time.time()
+
+        if self.blocked_since is None:
+            self.blocked_since = now
+
+        if now - self.blocked_since >= OBSTACLE_BLOCK_TIMEOUT:
+            # 持续遮挡超时：放弃该目标
+            self.blocked_since = None
+            return "giveup"
+
+        return "blocked"
 
     def _limit_accel(self, left, right):
         """方案 12：轮速加速度限幅。

@@ -11,7 +11,14 @@ from config import (
     SHOW_MASK_WINDOW,
     USE_GROUND_PROJECTION,
     HOMOGRAPHY_PATH,
-    CALIBRATION_PATH
+    CALIBRATION_PATH,
+    USE_OBSTACLE_AVOID,
+    USE_BATTERY_MONITOR,
+    BATTERY_LOW_MV,
+    BATTERY_CRITICAL_MV,
+    USE_WEB_SERVER,
+    WEB_SERVER_PORT,
+    WEB_JPEG_QUALITY
 )
 
 from camera import Camera
@@ -21,7 +28,11 @@ from robot_controller import RobotController
 from ground_projection import GroundProjection
 
 
-def draw_debug_info(frame, target, decision, miss_count=0, ground_info=None):
+def draw_debug_info(
+    frame, target, decision, miss_count=0, ground_info=None,
+    obstacle=None, battery_mv=None, collected_count=0,
+    obstacle_state="clear"
+):
     display_frame = frame.copy()
 
     if target is not None:
@@ -86,6 +97,24 @@ def draw_debug_info(frame, target, decision, miss_count=0, ground_info=None):
                 2
             )
 
+    # 方案 19：障碍物框红色显示
+    if obstacle is not None:
+        ox = obstacle["x"]
+        oy = obstacle["y"]
+        ow = obstacle["w"]
+        oh = obstacle["h"]
+
+        cv2.rectangle(display_frame, (ox, oy), (ox + ow, oy + oh), (0, 0, 255), 2)
+        cv2.putText(
+            display_frame,
+            f"{obstacle.get('cls', '?')} {obstacle['confidence']:.2f}",
+            (ox, max(oy - 10, 20)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 0, 255),
+            2
+        )
+
     cv2.line(
         display_frame,
         (FRAME_WIDTH // 2, 0),
@@ -118,6 +147,34 @@ def draw_debug_info(frame, target, decision, miss_count=0, ground_info=None):
         2
     )
 
+    # 第二行状态：捡球计数 / 电量 / 避障状态（方案 19 + 20）
+    status_parts = [f"collected:{collected_count}"]
+
+    if obstacle_state == "blocked":
+        status_parts.append("OBSTACLE:WAIT")
+    elif obstacle_state == "giveup":
+        status_parts.append("OBSTACLE:GIVEUP")
+
+    if battery_mv is not None:
+        color_batt = (0, 255, 0)
+        if battery_mv <= BATTERY_CRITICAL_MV:
+            color_batt = (0, 0, 255)
+        elif battery_mv <= BATTERY_LOW_MV:
+            color_batt = (0, 255, 255)
+        status_parts.append(f"batt:{battery_mv / 1000.0:.2f}V")
+
+    status_text = "  ".join(status_parts)
+
+    cv2.putText(
+        display_frame,
+        status_text,
+        (20, 70),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2
+    )
+
     return display_frame
 
 
@@ -145,6 +202,22 @@ def execute_decision(robot, decision, last_command):
             return direction
 
     return last_command
+
+
+def _web_status(decision, collected_count, battery_mv, obstacle,
+                obstacle_state, decision_maker):
+    """方案 22：构造推送给 Web 监控的状态字典。"""
+    return {
+        "mode": "ground" if decision_maker.use_ground else "pixel",
+        "action": decision.get("action", "?"),
+        "collected": collected_count,
+        "battery_mv": battery_mv,
+        "obstacle": (
+            obstacle.get("cls") if obstacle else None
+        ),
+        "obstacle_state": obstacle_state,
+        "miss_count": decision_maker.miss_count
+    }
 
 
 def main():
@@ -180,9 +253,24 @@ def main():
 
         decision_maker = DecisionMaker(FRAME_WIDTH, projection=projection)
 
+        # 方案 22：Web 远程监控（可选）
+        web_server = None
+
+        if USE_WEB_SERVER:
+            from web_server import WebMonitor
+
+            web_server = WebMonitor(port=WEB_SERVER_PORT, jpeg_quality=WEB_JPEG_QUALITY)
+            web_server.start()
+
         last_command = None
         collect_start_time = None
         is_collecting = False
+
+        # 方案 20：捡球成功计数
+        collected_count = 0
+
+        # 方案 20：低电压报警节流（避免每帧刷屏）
+        last_low_batt_warn = 0.0
 
         mode = "ground projection" if decision_maker.use_ground else "pixel"
         print(f"Program started with YOLO detector ({mode} mode).")
@@ -200,6 +288,59 @@ def main():
                 frame = projection.undistort(frame)
 
             target, mask = detector.detect(frame)
+
+            # 方案 19：障碍物检测（独立模型推理，不影响羽毛球检测）
+            obstacle = detector.detect_obstacles(frame) if USE_OBSTACLE_AVOID else None
+
+            # 方案 19：避障状态检查
+            obstacle_state = decision_maker.check_obstacle(target, obstacle)
+
+            # 方案 20：电池电压
+            battery_mv = robot.get_battery_mv() if USE_BATTERY_MONITOR else None
+
+            # 方案 20：低电压报警（每 5 秒最多一次），严重低电压强制停车
+            if (
+                battery_mv is not None
+                and battery_mv <= BATTERY_CRITICAL_MV
+            ):
+                print(f"Battery critical: {battery_mv}mV, stopping.")
+                robot.stop()
+                robot.collect_off()
+                last_command = "STOP"
+                decision = {"action": "STOP"}
+
+                # 严重低电压：持续停车，跳过正常决策（防止覆盖 STOP）
+                display_frame = draw_debug_info(
+                    frame, target, decision, decision_maker.miss_count,
+                    None, obstacle, battery_mv, collected_count,
+                    obstacle_state
+                )
+
+                if web_server is not None:
+                    web_server.update(
+                        display_frame,
+                        _web_status(
+                            decision, collected_count, battery_mv,
+                            obstacle, obstacle_state, decision_maker
+                        )
+                    )
+
+                cv2.imshow("Robot Camera YOLO", display_frame)
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
+                continue
+
+            if (
+                battery_mv is not None
+                and battery_mv <= BATTERY_LOW_MV
+            ):
+                now = time.time()
+
+                if now - last_low_batt_warn >= 5.0:
+                    last_low_batt_warn = now
+                    print(f"Battery low: {battery_mv}mV.")
 
             decision = decision_maker.decide(target)
 
@@ -236,8 +377,10 @@ def main():
                         # 方案 10：找到下一个目标，直接切换焦点驶向它
                         print("Next target found, switching.")
                         detector.aim_at(next_target)
+                        collected_count += 1
                         last_command = None
                     else:
+                        collected_count += 1
                         last_command = "STOP"
                 else:
                     decision = {"action": "COLLECTING"}
@@ -245,7 +388,25 @@ def main():
                     robot.heartbeat()
 
             else:
-                if decision["action"] == "COLLECT":
+                # 方案 19：障碍物挡路处理
+                if obstacle_state == "giveup":
+                    # 持续遮挡超时：放弃该目标，进入搜索
+                    decision_maker._reset_pd_state()
+                    detector.reset()
+                    decision = {
+                        "action": "SEARCH",
+                        "direction": decision_maker.last_seen_direction
+                    }
+                    last_command = execute_decision(
+                        robot, decision, last_command
+                    )
+                elif obstacle_state == "blocked":
+                    # 障碍物挡路：停车等待（障碍物可能是移动的人）
+                    if last_command != "OBSTACLE_WAIT":
+                        robot.stop()
+                        last_command = "OBSTACLE_WAIT"
+                    decision = {"action": "OBSTACLE_WAIT"}
+                elif decision["action"] == "COLLECT":
                     decision_maker.start_collecting(target)
                     robot.stop()
                     time.sleep(0.2)
@@ -258,8 +419,19 @@ def main():
 
             display_frame = draw_debug_info(
                 frame, target, decision, decision_maker.miss_count,
-                ground_info
+                ground_info, obstacle, battery_mv, collected_count,
+                obstacle_state
             )
+
+            # 方案 22：推送到 Web 监控
+            if web_server is not None:
+                web_server.update(
+                    display_frame,
+                    _web_status(
+                        decision, collected_count, battery_mv,
+                        obstacle, obstacle_state, decision_maker
+                    )
+                )
 
             cv2.imshow("Robot Camera YOLO", display_frame)
 
@@ -282,6 +454,9 @@ def main():
 
         if camera is not None:
             camera.release()
+
+        if web_server is not None:
+            web_server.stop()
 
         cv2.destroyAllWindows()
 

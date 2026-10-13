@@ -1,4 +1,5 @@
 import time
+import threading
 import serial
 
 
@@ -6,6 +7,14 @@ class RobotController:
     def __init__(self, use_serial=False, port="COM3", baud_rate=115200):
         self.use_serial = use_serial
         self.serial_conn = None
+
+        # 方案 20：固件上报状态（电池电压 mV）
+        self.battery_mv = None
+        self.last_battery_time = None
+
+        # 串口读取线程：持续解析固件上报行（BATT <mv> 等）
+        self._read_thread = None
+        self._running = False
 
         if self.use_serial:
             try:
@@ -15,6 +24,45 @@ class RobotController:
             except Exception as e:
                 print("Serial connection failed:", e)
                 self.use_serial = False
+
+            if self.use_serial:
+                self._start_reader()
+
+    def _start_reader(self):
+        """启动后台串口读取线程，解析固件上报。"""
+        self._running = True
+        self._read_thread = threading.Thread(
+            target=self._read_loop, daemon=True
+        )
+        self._read_thread.start()
+
+    def _read_loop(self):
+        """后台线程：逐行读取固件上报，解析 BATT <mv>。"""
+        while self._running:
+            try:
+                line = self.serial_conn.readline().decode("utf-8").strip()
+            except Exception:
+                break
+
+            if not line:
+                continue
+
+            if line.startswith("BATT "):
+                try:
+                    self.battery_mv = int(line.split()[1])
+                    self.last_battery_time = time.time()
+                except (ValueError, IndexError):
+                    pass
+
+    def get_battery_mv(self):
+        """返回最近上报的电池电压（mV），从未上报或数据过旧（>5s）返回 None。"""
+        if self.battery_mv is None or self.last_battery_time is None:
+            return None
+
+        if time.time() - self.last_battery_time > 5.0:
+            return None
+
+        return self.battery_mv
 
     def send_command(self, command):
         print("Command:", command)
@@ -55,5 +103,10 @@ class RobotController:
             self.serial_conn.write(b"PING\n")
 
     def close(self):
+        self._running = False
+
+        if self._read_thread is not None:
+            self._read_thread.join(timeout=1.0)
+
         if self.serial_conn:
             self.serial_conn.close()

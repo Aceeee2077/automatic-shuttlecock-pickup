@@ -11,7 +11,11 @@ from config import (
     USE_KALMAN,
     KALMAN_POS_NOISE,
     KALMAN_VEL_NOISE,
-    KALMAN_MEAS_NOISE
+    KALMAN_MEAS_NOISE,
+    USE_OBSTACLE_AVOID,
+    OBSTACLE_MODEL_PATH,
+    OBSTACLE_CLASSES,
+    OBSTACLE_CONF_THRESHOLD
 )
 
 from kalman_filter import ConstantVelocityKalman
@@ -19,7 +23,7 @@ from kalman_filter import ConstantVelocityKalman
 
 class ShuttleDetector:
     """
-    方案 4（ByteTrack 跟踪）+ 方案 8（Kalman 平滑）。
+    方案 4（ByteTrack 跟踪）+ 方案 8（Kalman 平滑）+ 方案 19（障碍物检测）。
 
     - model.track 获得稳定的目标 ID，位置逐帧关联，单帧检测噪声被跟踪器吸收
     - 位置 (cx, cy) 用匀速模型 Kalman 平滑；漏检期间 predict() 外推轨迹，
@@ -43,6 +47,23 @@ class ShuttleDetector:
     def __init__(self):
         self.model = YOLO(YOLO_MODEL_PATH)
 
+        # 方案 19：障碍物检测模型（可选，为 None 时复用羽毛球模型）
+        self.obstacle_model = None
+
+        if USE_OBSTACLE_AVOID:
+            path = OBSTACLE_MODEL_PATH or YOLO_MODEL_PATH
+            self.obstacle_model = YOLO(path)
+
+            self.obstacle_class_ids = None
+
+            names = self.obstacle_model.names
+
+            if names:
+                wanted = set(OBSTACLE_CLASSES)
+                self.obstacle_class_ids = {
+                    cid for cid, name in names.items() if name in wanted
+                }
+
         # EMA 平滑后的目标状态（w/h/area 一直用 EMA；位置在非 Kalman 模式下也用它）
         self.smoothed = None
         # 锁定的跟踪 ID
@@ -56,6 +77,72 @@ class ShuttleDetector:
 
         # 本帧全部候选框（不做平滑/选择），供捡球确认和多球调度使用
         self.last_candidates = []
+
+        # 方案 19：本帧最近的障碍物框（供决策避障和调试显示用）
+        self.last_obstacle = None
+
+    def detect_obstacles(self, frame):
+        """方案 19：检测障碍物，返回本帧最近的障碍物框（无则 None）。
+
+        障碍物框格式与候选框一致，额外带 "cls" 类别名。
+        "最近"按框底边 y 值最大（画面中越靠下越近）判断。
+        """
+        self.last_obstacle = None
+
+        if not USE_OBSTACLE_AVOID or self.obstacle_model is None:
+            return None
+
+        results = self.obstacle_model(
+            frame,
+            conf=OBSTACLE_CONF_THRESHOLD,
+            verbose=False
+        )
+
+        result = results[0]
+
+        if result.boxes is None or len(result.boxes) == 0:
+            return None
+
+        xyxys = result.boxes.xyxy.cpu().numpy()
+        confs = result.boxes.conf.cpu().numpy()
+        clss = result.boxes.cls.cpu().numpy()
+
+        nearest = None
+
+        for i in range(len(xyxys)):
+            cls_id = int(clss[i])
+
+            # 只保留配置的障碍物类别
+            if (
+                self.obstacle_class_ids is not None
+                and cls_id not in self.obstacle_class_ids
+            ):
+                continue
+
+            x1, y1, x2, y2 = xyxys[i]
+            w = int(x2 - x1)
+            h = int(y2 - y1)
+
+            if w <= 0 or h <= 0:
+                continue
+
+            box = {
+                "x": int(x1),
+                "y": int(y1),
+                "w": w,
+                "h": h,
+                "area": w * h,
+                "confidence": float(confs[i]),
+                "cls": self.obstacle_model.names.get(cls_id, str(cls_id))
+            }
+
+            # 越靠下（底边 y 越大）越近
+            if nearest is None or box["y"] + box["h"] > nearest["y"] + nearest["h"]:
+                nearest = box
+
+        self.last_obstacle = nearest
+
+        return nearest
 
     def _ema_update(self, prev, cur):
         """对框尺寸和面积做指数滑动平均。"""

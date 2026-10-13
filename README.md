@@ -14,6 +14,9 @@
 | 距离估计 | 支持像素面积估距（默认）与单应变换地面投影（米制，需标定）两种模式 |
 | 多球调度 | 捡完一颗自动切换到视野内下一颗，无需重新搜索 |
 | 捡球确认 | 视觉确认球是否被捡走，失败就地重试，重试超限进入冷却防止卡死 |
+| 障碍物避障 | 独立 YOLO 模型检测行人、背包等挡路障碍物，挡路停车等待，持续遮挡超时放弃目标 |
+| 电量监测 | 固件每秒上报电池电压，低电压报警节流，严重低电压自动停车，画面与网页同步显示电量 |
+| Web 远程监控 | 内置 MJPEG 推流 + 状态接口，浏览器打开 `http://<ip>:8000` 远程查看画面、动作、电量与捡球计数 |
 | 安全退出 | Ctrl+C 或按 Q 退出时自动停车、关闭捡球机构、释放资源 |
 | 串口看门狗 | 固件侧 500ms 无指令自动停车，捡球期间发心跳保活 |
 
@@ -27,10 +30,11 @@ automatic_shuttlecock_pickup
 ├── camera.py                # 相机：后台线程读帧，只保留最新帧
 ├── detector.py              # YOLO 检测 + ByteTrack 跟踪 + Kalman 平滑
 ├── kalman_filter.py         # 匀速模型 Kalman 滤波器
-├── decision.py              # 决策层：PD 控制、捡球确认、多球调度
+├── decision.py              # 决策层：PD 控制、捡球确认、多球调度、避障
 ├── ground_projection.py     # 单应变换：图像坐标 -> 地面坐标（米）
-├── robot_controller.py      # 串口指令封装
-├── arduino_controller.ino   # Arduino 固件：PWM 差速 + 看门狗
+├── robot_controller.py      # 串口指令封装 + 后台解析固件上报（电量）
+├── arduino_controller.ino   # Arduino 固件：PWM 差速 + 看门狗 + 电量上报
+├── web_server.py            # Web 远程监控：MJPEG 推流 + 状态 JSON（可选）
 ├── camera_calibration.py    # 相机内参标定脚本（可选）
 ├── calibrate_homography.py  # 地面单应矩阵标定脚本（可选）
 ├── requirements.txt
@@ -75,6 +79,18 @@ python main.py
 | `MULTI_BALL` | `True` | 多球调度开关 |
 | `COLLECT_CONFIRM` | `True` | 捡球视觉确认开关 |
 | `MAX_ACCEL` | `1200.0` | 轮速加速度限幅（PWM/秒），防急转打滑 |
+| `USE_OBSTACLE_AVOID` | `False` | 障碍物避障开关 |
+| `OBSTACLE_MODEL_PATH` | `None` | 障碍物模型路径，None 复用羽毛球模型 |
+| `OBSTACLE_CLASSES` | `("person", ...)` | 障碍物类别（行人、背包等） |
+| `OBSTACLE_STOP_DISTANCE_M` | `0.5` | 障碍物停车距离（地面模式，米） |
+| `OBSTACLE_AREA_NEAR` | `80000` | 障碍物近似阈值（像素模式，面积大 = 近） |
+| `OBSTACLE_BLOCK_TIMEOUT` | `8.0` | 持续遮挡超时（秒），超时放弃目标 |
+| `USE_BATTERY_MONITOR` | `False` | 电量监测开关 |
+| `BATTERY_LOW_MV` | `10500` | 低电压阈值（mV），低于则报警 |
+| `BATTERY_CRITICAL_MV` | `10000` | 严重低电压阈值（mV），低于则强制停车 |
+| `USE_WEB_SERVER` | `False` | Web 远程监控开关 |
+| `WEB_SERVER_PORT` | `8000` | Web 监控端口 |
+| `WEB_JPEG_QUALITY` | `70` | Web 推流 JPEG 质量（1~100） |
 
 ## 工作流程
 
@@ -84,6 +100,8 @@ python main.py
 4. **确认**：捡球期间统计目标位置球是否仍可见，判断捡球是否成功
 5. **换目标**：捡球成功后从当前画面挑选下一颗球直接驶向；失败则就地重试，重试超限冷却 10 秒跳过该球
 6. **搜索**：视野内没有球时按最后看到的方向原地旋转搜索
+7. **避障**（可选）：行驶途中检测到行人等障碍物挡在目标与机器人之间时停车等待，持续遮挡超过 8 秒放弃该目标转为搜索
+8. **电量保护**（可选）：电池电压低于 10.5V 报警，低于 10V 自动停车并关闭捡球机构
 
 ## 可选：地面投影标定
 
@@ -109,8 +127,13 @@ python main.py
 
 固件侧看门狗 500ms 内没收到任何指令自动停车并关闭捡球电机；上电后未收到指令不会触发。
 
+固件每秒上报一次电池电压：`BATT <电压毫秒值>`，格式为 `BATT 11200`（11.2V）。
+
 ## 注意事项
 
 - `MIN_SPEED = 80` 目前未参与控制，实际生效的低速补偿值是 `decision.py` 中硬编码的 40，实车调试以该值为准
 - 纯白色检测方案已弃用，白纸、白墙、衣服容易误判，最终方案以 YOLO 模型为准
 - 地面标定时 `SQUARE_SIZE` 需按实际打印的棋盘格尺寸修改
+- 电量监测需在电池与 Arduino A0 之间接分压电阻（10k + 3.3k，分压比 4.03），并按实际电阻值修改固件中的 `VOLTAGE_DIVIDER_RATIO`；A0 输入电压不得超过 5V
+- 避障默认复用羽毛球模型（不含行人类别），实际使用需训练一个含 person/backpack 等类别的独立模型，并在 `OBSTACLE_MODEL_PATH` 指定
+- Web 监控仅用于局域网观察，无鉴权，不要暴露到公网

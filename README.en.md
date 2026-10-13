@@ -14,6 +14,9 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 | Distance estimation | Two modes: pixel-area estimation (default) and homography-based ground projection (metric, requires calibration) |
 | Multi-ball scheduling | After picking up one ball, switches directly to the next one in view without re-searching |
 | Pickup confirmation | Visually confirms whether the ball was picked up; retries in place on failure, enters cooldown after too many retries to avoid getting stuck |
+| Obstacle avoidance | A separate YOLO model detects blocking obstacles such as people and backpacks; stops and waits when blocked, gives up the target after a prolonged block |
+| Battery monitoring | The firmware reports battery voltage every second; low-voltage warnings are throttled, critical voltage forces a stop, and the level shows on both screen and web |
+| Web remote monitoring | Built-in MJPEG stream plus a status endpoint — open `http://<ip>:8000` in a browser to view the feed, action, battery, and pickup count remotely |
 | Safe shutdown | Ctrl+C or Q automatically stops the robot, turns off the pickup motor, and releases resources |
 | Serial watchdog | Firmware-side 500ms command timeout auto-stop; heartbeat keeps the pickup motor alive during collection |
 
@@ -27,10 +30,11 @@ automatic_shuttlecock_pickup
 ├── camera.py                # Camera: background thread reads frames, keeps the latest only
 ├── detector.py              # YOLO detection + ByteTrack tracking + Kalman smoothing
 ├── kalman_filter.py         # Constant-velocity Kalman filter
-├── decision.py              # Decision layer: PD control, pickup confirmation, multi-ball scheduling
+├── decision.py              # Decision layer: PD control, pickup confirmation, multi-ball scheduling, obstacle avoidance
 ├── ground_projection.py     # Homography: image coordinates -> ground coordinates (meters)
-├── robot_controller.py      # Serial command wrapper
-├── arduino_controller.ino   # Arduino firmware: PWM differential drive + watchdog
+├── robot_controller.py      # Serial command wrapper + background firmware report parsing (battery)
+├── arduino_controller.ino   # Arduino firmware: PWM differential drive + watchdog + battery reporting
+├── web_server.py            # Web remote monitoring: MJPEG stream + status JSON (optional)
 ├── camera_calibration.py    # Camera intrinsics calibration script (optional)
 ├── calibrate_homography.py  # Ground homography calibration script (optional)
 ├── requirements.txt
@@ -75,6 +79,18 @@ All parameters live in `config.py`. Common ones:
 | `MULTI_BALL` | `True` | Multi-ball scheduling switch |
 | `COLLECT_CONFIRM` | `True` | Visual pickup confirmation switch |
 | `MAX_ACCEL` | `1200.0` | Wheel-speed acceleration limit (PWM/s), prevents slipping on sharp turns |
+| `USE_OBSTACLE_AVOID` | `False` | Obstacle avoidance switch |
+| `OBSTACLE_MODEL_PATH` | `None` | Obstacle model path; None reuses the shuttlecock model |
+| `OBSTACLE_CLASSES` | `("person", ...)` | Obstacle classes (people, backpacks, etc.) |
+| `OBSTACLE_STOP_DISTANCE_M` | `0.5` | Obstacle stop distance (ground mode, meters) |
+| `OBSTACLE_AREA_NEAR` | `80000` | Obstacle proximity threshold (pixel mode, larger area = closer) |
+| `OBSTACLE_BLOCK_TIMEOUT` | `8.0` | Prolonged-block timeout (seconds); the target is abandoned after it expires |
+| `USE_BATTERY_MONITOR` | `False` | Battery monitoring switch |
+| `BATTERY_LOW_MV` | `10500` | Low-voltage threshold (mV); a warning is raised below it |
+| `BATTERY_CRITICAL_MV` | `10000` | Critical voltage threshold (mV); the robot force-stops below it |
+| `USE_WEB_SERVER` | `False` | Web remote monitoring switch |
+| `WEB_SERVER_PORT` | `8000` | Web monitoring port |
+| `WEB_JPEG_QUALITY` | `70` | Web stream JPEG quality (1–100) |
 
 ## Workflow
 
@@ -84,6 +100,8 @@ All parameters live in `config.py`. Common ones:
 4. **Confirmation**: While collecting, the system tracks whether the ball is still visible at its original spot to judge pickup success
 5. **Next target**: On success, picks the next ball in the current frame and drives straight to it; on failure, retries in place, and after too many retries cools down for 10 seconds and skips that ball
 6. **Search**: When nothing is in view, spins in place toward the direction where the ball was last seen
+7. **Obstacle avoidance** (optional): While driving, if an obstacle such as a person blocks the path between the robot and the target, the robot stops and waits; after a block longer than 8 seconds it abandons the target and resumes searching
+8. **Battery protection** (optional): Warns below 10.5V, force-stops the robot and turns off the pickup motor below 10V
 
 ## Optional: Ground Projection Calibration
 
@@ -109,8 +127,13 @@ Baud rate 115200, commands terminated by a newline.
 
 The firmware watchdog auto-stops the robot and turns off the pickup motor if no command arrives within 500 ms; it does not trigger before the first command after power-up.
 
+The firmware reports the battery voltage once per second: `BATT <millivolts>`, e.g. `BATT 11200` (11.2V).
+
 ## Notes
 
 - `MIN_SPEED = 80` is currently unused; the effective low-speed compensation is the hardcoded value 40 in `decision.py` — tune against that on the real robot
 - The legacy white-region detection is deprecated: white paper, walls, and clothing cause false positives. YOLO is the final approach
 - Set `SQUARE_SIZE` to match your printed checkerboard size before ground calibration
+- Battery monitoring requires a voltage divider (10k + 3.3k, ratio 4.03) between the battery and Arduino A0; update `VOLTAGE_DIVIDER_RATIO` in the firmware to match your actual resistors. The A0 input must never exceed 5V
+- Obstacle avoidance reuses the shuttlecock model by default (which lacks person classes); train a separate model containing person/backpack classes and point `OBSTACLE_MODEL_PATH` at it for real use
+- The web monitor is for LAN observation only, with no authentication — do not expose it to the public internet
