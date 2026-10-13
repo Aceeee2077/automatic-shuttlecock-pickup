@@ -47,6 +47,23 @@ YOLO_MODEL_PATH = "model/shuttlecock.pt"
 # 太高：容易漏识别
 CONFIDENCE_THRESHOLD = 0.6
 
+# =========================
+# 目标跟踪（方案 4）
+# =========================
+
+# 是否启用 ByteTrack 跟踪（model.track），False 退回单帧检测
+USE_TRACKER = True
+
+# EMA 平滑系数：0~1，越小越平滑但延迟越大，1 等于不平滑
+EMA_ALPHA = 0.4
+
+# 连续丢失多少帧才判定真丢失（期间按最后已知方向盲走）
+MISS_FRAME_LIMIT = 10
+
+# 跟踪目标 ID 锁定：一旦锁定某个 ID 就只跟它，None 表示跟分数最高的
+# （多球场景下防止频繁换目标；单球场景保持 None 即可）
+LOCK_TARGET_ID = None
+
 # 判断已经靠近羽毛球的面积阈值
 # YOLO 框面积超过这个数，就启动捡球机构
 TARGET_AREA_NEAR = 45000

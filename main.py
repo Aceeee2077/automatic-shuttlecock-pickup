@@ -17,7 +17,7 @@ from decision import DecisionMaker
 from robot_controller import RobotController
 
 
-def draw_debug_info(frame, target, decision):
+def draw_debug_info(frame, target, decision, miss_count=0):
     display_frame = frame.copy()
 
     if target is not None:
@@ -28,19 +28,28 @@ def draw_debug_info(frame, target, decision):
         area = target["area"]
 
         confidence = target.get("confidence", None)
+        track_id = target.get("id", None)
+        missed = target.get("missed", False)
+
+        # 丢失回放的旧框用黄色画，正常检测用绿色
+        color = (0, 255, 255) if missed else (0, 255, 0)
 
         cv2.rectangle(
             display_frame,
             (x, y),
             (x + w, y + h),
-            (0, 255, 0),
+            color,
             2
         )
 
+        id_text = f", id: {track_id}" if track_id is not None else ""
         if confidence is not None:
-            label = f"Shuttlecock {confidence:.2f}, area: {int(area)}"
+            label = f"Shuttlecock {confidence:.2f}{id_text}, area: {int(area)}"
         else:
-            label = f"Shuttle area: {int(area)}"
+            label = f"Shuttle{id_text} area: {int(area)}"
+
+        if missed:
+            label += " (STALE)"
 
         cv2.putText(
             display_frame,
@@ -48,7 +57,7 @@ def draw_debug_info(frame, target, decision):
             (x, max(y - 10, 20)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
-            (0, 255, 0),
+            color,
             2
         )
 
@@ -60,7 +69,7 @@ def draw_debug_info(frame, target, decision):
         2
     )
 
-    # decision 现在是动作字典，显示形式改为 "action | L speed R speed"
+    # decision 现在是动作字典，显示形式为 "action | L speed R speed"
     if isinstance(decision, dict):
         if decision["action"] == "DRIVE":
             text = f"DRIVE L:{decision['left']} R:{decision['right']}"
@@ -70,6 +79,9 @@ def draw_debug_info(frame, target, decision):
                 text += f" {decision.get('direction', '')}"
     else:
         text = str(decision)
+
+    # 显示丢帧计数，方便调试跟踪稳定性
+    text += f"  miss:{miss_count}"
 
     cv2.putText(
         display_frame,
@@ -169,7 +181,9 @@ def main():
                 else:
                     last_command = execute_decision(robot, decision, last_command)
 
-            display_frame = draw_debug_info(frame, target, decision)
+            display_frame = draw_debug_info(
+                frame, target, decision, decision_maker.miss_count
+            )
 
             cv2.imshow("Robot Camera YOLO", display_frame)
 

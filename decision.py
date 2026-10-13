@@ -8,18 +8,25 @@ from config import (
     MAX_SPEED,
     FORWARD_SPEED,
     DIST_PER_SQRT_AREA,
-    COLLECT_DISTANCE
+    COLLECT_DISTANCE,
+    MISS_FRAME_LIMIT
 )
 
 
 class DecisionMaker:
     """
-    比例控制版本（方案 3）。
+    方案 3（比例控制）+ 方案 4（连续丢帧判定）。
 
-    decide() 返回动作字典而不是单个字符串：
+    decide() 返回动作字典：
     - {"action": "COLLECT"}                     启动捡球
     - {"action": "DRIVE", "left": L, "right": R} 按左右轮速度行驶（PWM 0~255）
     - {"action": "SEARCH", "direction": ...}    丢目标，按方向搜索
+
+    丢失判定逻辑：
+    - detector 单帧漏检时返回上一帧平滑结果并标记 "missed": True，此时
+      miss_count 递增，但继续按盲走方向行驶
+    - 连续 MISS_FRAME_LIMIT 帧没有真正检测到目标，才判定真丢失进入 SEARCH
+    - missed 结果不允许触发 COLLECT（防止对着旧位置捡球）
     """
 
     def __init__(self, frame_width):
@@ -34,6 +41,9 @@ class DecisionMaker:
         self.prev_offset = None
         self.prev_time = None
 
+        # 连续丢失帧计数
+        self.miss_count = 0
+
     def estimate_distance(self, area):
         """用框面积反推相对距离：distance ≈ C / sqrt(area)"""
         if area <= 0:
@@ -42,8 +52,30 @@ class DecisionMaker:
 
     def decide(self, target):
         if target is None:
+            # detector 没有任何历史（从未检测到）或已 reset
             self._reset_pd_state()
             return {"action": "SEARCH", "direction": self.last_seen_direction}
+
+        # ---- 丢帧计数处理 ----
+        missed = target.get("missed", False)
+
+        if missed:
+            self.miss_count += 1
+
+            if self.miss_count >= MISS_FRAME_LIMIT:
+                # 超过丢帧上限，判定真丢失
+                self.miss_count = 0
+                self._reset_pd_state()
+                return {
+                    "action": "SEARCH",
+                    "direction": self.last_seen_direction
+                }
+
+            # 丢失但未超限：按最后已知方向盲走
+            return {"action": "SEARCH", "direction": self.last_seen_direction}
+
+        # 真正检测到目标，重置丢帧计数
+        self.miss_count = 0
 
         target_center_x = target["x"] + target["w"] // 2
         target_area = target["area"]
