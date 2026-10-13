@@ -17,7 +17,9 @@ from config import (
     FORWARD_DISTANCE_GAIN,
     COLLECT_DISTANCE_M,
     MULTI_BALL,
-    NEXT_TARGET_MIN_SEP
+    NEXT_TARGET_MIN_SEP,
+    MAX_ACCEL,
+    USE_ACCEL_LIMIT
 )
 
 from ground_projection import GroundProjection
@@ -26,7 +28,7 @@ from ground_projection import GroundProjection
 class DecisionMaker:
     """
     方案 3（比例控制）+ 方案 4（连续丢帧判定）+ 方案 9（地面投影闭环）
-    + 方案 10（多球调度）+ 方案 11（捡球确认）。
+    + 方案 10（多球调度）+ 方案 11（捡球确认）+ 方案 12（加速度限幅）。
 
     两种模式（USE_GROUND_PROJECTION 切换）：
     - 像素模式：水平偏差像素 + 面积估距（方案 3 原逻辑）
@@ -93,11 +95,55 @@ class DecisionMaker:
         # ---- 方案 10：被捡球中心（多球换目标时排除用） ----
         self.last_collected_center = None
 
+        # ---- 方案 12：当前实际下发的轮速（用于加速度限幅） ----
+        self.current_left = 0
+        self.current_right = 0
+        self.last_drive_time = None
+
     def estimate_distance(self, area):
         """像素模式：用框面积反推相对距离：distance ≈ C / sqrt(area)"""
         if area <= 0:
             return float("inf")
         return DIST_PER_SQRT_AREA / math.sqrt(area)
+
+    def _limit_accel(self, left, right):
+        """方案 12：轮速加速度限幅。
+
+        限制相邻两次 DRIVE 之间每侧轮速的 PWM 增量（按帧间隔 dt 折算），
+        平滑加减速，防止急转/急停打滑导致丢球。
+
+        - USE_ACCEL_LIMIT=False 时直接透传
+        - 重新进入 DRIVE（如捡球后重新出发）时从当前轮速平滑起步
+        """
+        if not USE_ACCEL_LIMIT:
+            self.current_left = left
+            self.current_right = right
+            return left, right
+
+        now = time.time()
+
+        if self.last_drive_time is None or now <= self.last_drive_time:
+            dt = 0.033
+        else:
+            dt = min(now - self.last_drive_time, 0.5)
+
+        self.last_drive_time = now
+
+        max_step = MAX_ACCEL * dt
+
+        left = int(max(
+            self.current_left - max_step,
+            min(left, self.current_left + max_step)
+        ))
+        right = int(max(
+            self.current_right - max_step,
+            min(right, self.current_right + max_step)
+        ))
+
+        self.current_left = left
+        self.current_right = right
+
+        return left, right
 
     def decide(self, target):
         if target is None:
@@ -296,6 +342,9 @@ class DecisionMaker:
         if 0 < right < 40:
             right = 40
 
+        # 方案 12：加速度限幅后下发
+        left, right = self._limit_accel(left, right)
+
         return {"action": "DRIVE", "left": left, "right": right}
 
     # ---- 像素模式（方案 3 原逻辑） ----
@@ -356,6 +405,9 @@ class DecisionMaker:
             left = 40
         if 0 < right < 40:
             right = 40
+
+        # 方案 12：加速度限幅后下发
+        left, right = self._limit_accel(left, right)
 
         return {"action": "DRIVE", "left": left, "right": right}
 

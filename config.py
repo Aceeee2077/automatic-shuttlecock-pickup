@@ -143,3 +143,14 @@ MAX_COLLECT_RETRIES = 2
 
 # 重试超限后的捡球冷却时间（秒），期间 COLLECT 动作替换为 SEARCH
 COLLECT_RETRY_COOLDOWN = 10.0
+
+# =========================
+# 轮速加速度限幅（方案 12）
+# =========================
+
+# 限制每秒最大 PWM 增量，平滑加减速，防止急转/急停打滑、丢球
+# 按帧率 30fps 估算：单帧增量 ≈ MAX_ACCEL / 30
+MAX_ACCEL = 1200.0
+
+# 是否启用加速度限幅，False 退回无限制（立即到达目标速度）
+USE_ACCEL_LIMIT = True

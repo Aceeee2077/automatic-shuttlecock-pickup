@@ -10,7 +10,7 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 |--------|-------------|
 | Target detection | YOLOv8 shuttlecock detection with ByteTrack multi-object tracking and stable target ID locking |
 | Trajectory smoothing | Constant-velocity Kalman filter on target position; extrapolates the trajectory during missed detections (up to 1 second) |
-| Drive control | PD proportional differential steering, straight drive inside the dead zone, automatic low-speed compensation against motor stalling |
+| Drive control | PD proportional differential steering, straight drive inside the dead zone, wheel-speed acceleration limiting against slipping, automatic low-speed compensation against motor stalling |
 | Distance estimation | Two modes: pixel-area estimation (default) and homography-based ground projection (metric, requires calibration) |
 | Multi-ball scheduling | After picking up one ball, switches directly to the next one in view without re-searching |
 | Pickup confirmation | Visually confirms whether the ball was picked up; retries in place on failure, enters cooldown after too many retries to avoid getting stuck |
@@ -74,6 +74,7 @@ All parameters live in `config.py`. Common ones:
 | `USE_GROUND_PROJECTION` | `False` | Ground projection switch; calibrate first |
 | `MULTI_BALL` | `True` | Multi-ball scheduling switch |
 | `COLLECT_CONFIRM` | `True` | Visual pickup confirmation switch |
+| `MAX_ACCEL` | `1200.0` | Wheel-speed acceleration limit (PWM/s), prevents slipping on sharp turns |
 
 ## Workflow
 
