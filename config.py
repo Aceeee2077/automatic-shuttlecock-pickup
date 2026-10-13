@@ -64,6 +64,48 @@ MISS_FRAME_LIMIT = 10
 # （多球场景下防止频繁换目标；单球场景保持 None 即可）
 LOCK_TARGET_ID = None
 
+# =========================
+# Kalman 滤波（方案 8）
+# =========================
+
+# 启用匀速模型 Kalman 替代 EMA 平滑位置（漏检期间可外推运动轨迹）
+# False 时退回原 EMA 全量平滑
+USE_KALMAN = True
+
+# 过程噪声：越大越相信新测量（响应快、平滑弱）
+KALMAN_POS_NOISE = 4.0
+KALMAN_VEL_NOISE = 1.0
+
+# 测量噪声（像素方差）：越大越平滑但延迟越大
+KALMAN_MEAS_NOISE = 9.0
+
+# =========================
+# 地面投影（方案 9）
+# =========================
+
+# 启用后按地面方位角/距离闭环控制（需先运行 camera_calibration.py
+# 和 calibrate_homography.py 两个标定脚本）；False 退回像素模式
+USE_GROUND_PROJECTION = False
+
+# calibrate_homography.py 生成的单应矩阵
+HOMOGRAPHY_PATH = "homography.npz"
+
+# camera_calibration.py 生成的内参（可选，用于去畸变）
+CALIBRATION_PATH = "calibration.npz"
+
+# 方位角死区（rad，约 7 度）：|bearing| 小于该值时直行
+ANGLE_TOLERANCE = 0.12
+
+# 方位角 PD 增益
+KP_ANGLE = 1.6
+KD_ANGLE = 0.3
+
+# 直行前进速度随距离衰减：fwd = min(FORWARD_SPEED, distance * 该值)
+FORWARD_DISTANCE_GAIN = 600.0
+
+# 地面距离小于该值（米）启动捡球（仅地面投影模式生效）
+COLLECT_DISTANCE_M = 0.25
+
 # 判断已经靠近羽毛球的面积阈值
 # YOLO 框面积超过这个数，就启动捡球机构
 TARGET_AREA_NEAR = 45000
