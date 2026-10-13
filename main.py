@@ -18,7 +18,11 @@ from config import (
     BATTERY_CRITICAL_MV,
     USE_WEB_SERVER,
     WEB_SERVER_PORT,
-    WEB_JPEG_QUALITY
+    WEB_JPEG_QUALITY,
+    STUCK_REVERSE_SECONDS,
+    STUCK_REVERSE_SPEED,
+    STUCK_TURN_SECONDS,
+    STUCK_TURN_SPEED
 )
 
 from camera import Camera
@@ -201,7 +205,45 @@ def execute_decision(robot, decision, last_command):
                 robot.turn_right()
             return direction
 
+    if action == "SETTLE":
+        # 方案 26/27：到位观察或脱困冷却期间停车，仅发心跳防看门狗误停
+        if last_command != "SETTLE":
+            robot.stop()
+        robot.heartbeat()
+        return "SETTLE"
+
     return last_command
+
+
+def _hold_with_heartbeat(robot, seconds):
+    """方案 27：维持当前动作 seconds 秒，期间持续发心跳防看门狗误停。"""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        robot.heartbeat()
+        time.sleep(0.2)
+
+
+def execute_escape(robot, decision_maker):
+    """方案 27：卡死脱困动作（时间驱动，一次性阻塞执行）。
+
+    流程：后退 -> 原地转 -> 停止。脱困后 decision 端会清历史并
+    重新驶向目标；脱困计数/基线由 decision 端管理。
+    后退/转向期间持续发心跳，防止超过固件看门狗超时（500ms）被误停。
+    """
+    # 后退（先设速度再切方向，固件 PWM 沿用上次写入值）
+    robot.set_speed(STUCK_REVERSE_SPEED, STUCK_REVERSE_SPEED)
+    robot.backward()
+    _hold_with_heartbeat(robot, STUCK_REVERSE_SECONDS)
+    robot.stop()
+
+    # 原地转向：单轮旋转（左停右进 -> 左转）
+    robot.set_speed(0, STUCK_TURN_SPEED)
+    _hold_with_heartbeat(robot, STUCK_TURN_SECONDS)
+    robot.stop()
+
+    # 脱困结束：通知 decision 端清卡死历史，重新驶向目标
+    decision_maker.after_escape()
+    print("Escape done (reverse + turn).")
 
 
 def _web_status(decision, collected_count, battery_mv, obstacle,
@@ -414,6 +456,12 @@ def main():
                     collect_start_time = time.time()
                     is_collecting = True
                     last_command = "COLLECT_ON"
+                elif decision["action"] == "ESCAPE":
+                    # 方案 27：判定卡死，执行脱困（后退 + 原地转）
+                    execute_escape(robot, decision_maker)
+                    # 脱困后重置 PD/指令去重，下一帧重新驶向目标
+                    last_command = None
+                    decision = {"action": "SETTLE"}
                 else:
                     last_command = execute_decision(robot, decision, last_command)
 

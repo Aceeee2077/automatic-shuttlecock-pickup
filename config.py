@@ -204,3 +204,52 @@ WEB_SERVER_PORT = 8000
 
 # JPEG 推流质量（1~100）
 WEB_JPEG_QUALITY = 70
+
+# =========================
+# 三段式接近（方案 26）
+# =========================
+
+# 按距离切换控制档位（仅地面投影模式生效），近处低速精调，防撞、对准更准
+# 远距（>= STAGED_NEAR_DISTANCE_M）：全速 PD 正常接近
+# 近距（<  STAGED_NEAR_DISTANCE_M）：蠕行档，低速 + 更强转向增益，
+#   到位后暂停观察 STAGED_SETTLE_TIME 秒确认落位再捡球
+USE_STAGED_APPROACH = True
+
+# 近距档距离阈值（米），小于该值进入蠕行
+STAGED_NEAR_DISTANCE_M = 1.0
+
+# 蠕行档最大前进速度（PWM），低速保证到位精度
+STAGED_NEAR_SPEED = 60
+
+# 蠕行档方位角 PD 增益（低速下需要更猛的转向才能对准）
+STAGED_KP_ANGLE = 2.2
+STAGED_KD_ANGLE = 0.3
+
+# 到位暂停观察：近距且方位角进死区时，先停车观察确认落位再触发捡球
+# 防止投影误差导致没到跟前就开捡（按时间而非帧数，推理耗时不固定）
+STAGED_SETTLE_TIME = 1.0
+
+# =========================
+# 卡死检测与自动脱困（方案 27）
+# =========================
+
+# 启用卡死检测：持续前进但目标距离不缩小 -> 判定卡死并自动脱困
+USE_STUCK_DETECT = True
+
+# 判定卡死所需的持续时长（秒），期间距离无实质变化
+STUCK_DURATION = 2.0
+
+# 距离变化容差（米）：持续时长内距离缩小少于该值视为"没动"
+STUCK_DISTANCE_EPS = 0.15
+
+# 脱困动作参数
+STUCK_REVERSE_SECONDS = 0.5    # 后退时长
+STUCK_REVERSE_SPEED = 80       # 后退速度（PWM）
+STUCK_TURN_SECONDS = 0.6       # 原地转时长（约 30~45 度，视底盘而定）
+STUCK_TURN_SPEED = 80          # 原地转速度（PWM）
+
+# 同一目标最大脱困次数，超过后冷却跳过该球（防原地无限循环）
+STUCK_MAX_ESCAPES = 3
+
+# 脱困超限后的冷却时间（秒），期间不逼近该目标
+STUCK_RETRY_COOLDOWN = 8.0

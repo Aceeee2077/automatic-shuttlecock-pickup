@@ -1,4 +1,4 @@
-# Automatic Shuttlecock Pickup and Stacking Robot
+# Automatic Shuttlecock Pickup and Stacking Robot (Software Part)
 
 [English](README.en.md) | 中文
 
@@ -17,6 +17,8 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 | Obstacle avoidance | A separate YOLO model detects blocking obstacles such as people and backpacks; stops and waits when blocked, gives up the target after a prolonged block |
 | Battery monitoring | The firmware reports battery voltage every second; low-voltage warnings are throttled, critical voltage forces a stop, and the level shows on both screen and web |
 | Web remote monitoring | Built-in MJPEG stream plus a status endpoint — open `http://<ip>:8000` in a browser to view the feed, action, battery, and pickup count remotely |
+| Staged approach | In ground mode, within 1 m the robot automatically switches to a creep gear: lower speed with stronger turn gain, then pauses briefly to confirm alignment before picking up — prevents overshooting and improves alignment |
+| Stuck detection & escape | If the target distance stops decreasing while driving, the robot is judged stuck and automatically backs up then turns in place to escape; too many escapes on the same ball triggers a cooldown and skips it |
 | Safe shutdown | Ctrl+C or Q automatically stops the robot, turns off the pickup motor, and releases resources |
 | Serial watchdog | Firmware-side 500ms command timeout auto-stop; heartbeat keeps the pickup motor alive during collection |
 
@@ -91,17 +93,30 @@ All parameters live in `config.py`. Common ones:
 | `USE_WEB_SERVER` | `False` | Web remote monitoring switch |
 | `WEB_SERVER_PORT` | `8000` | Web monitoring port |
 | `WEB_JPEG_QUALITY` | `70` | Web stream JPEG quality (1–100) |
+| `USE_STAGED_APPROACH` | `True` | Staged approach switch (ground mode only) |
+| `STAGED_NEAR_DISTANCE_M` | `1.0` | Near-range creep-gear distance threshold (meters) |
+| `STAGED_NEAR_SPEED` | `60` | Max creep-gear forward speed (PWM) |
+| `STAGED_KP_ANGLE` / `STAGED_KD_ANGLE` | `2.2 / 0.3` | Creep-gear bearing PD gains (sharper turn at low speed) |
+| `STAGED_SETTLE_TIME` | `1.0` | Pause-to-observe duration (seconds) to confirm alignment before pickup |
+| `USE_STUCK_DETECT` | `True` | Stuck detection switch (ground mode only) |
+| `STUCK_DURATION` | `2.0` | Duration (seconds) of no progress before judging stuck |
+| `STUCK_DISTANCE_EPS` | `0.15` | Distance-change tolerance (meters); less counts as no movement |
+| `STUCK_REVERSE_SECONDS` / `STUCK_REVERSE_SPEED` | `0.5 / 80` | Escape reverse duration (s) and speed (PWM) |
+| `STUCK_TURN_SECONDS` / `STUCK_TURN_SPEED` | `0.6 / 80` | Escape in-place turn duration (s) and speed (PWM) |
+| `STUCK_MAX_ESCAPES` | `3` | Max escapes per target before cooldown |
+| `STUCK_RETRY_COOLDOWN` | `8.0` | Cooldown after escape limit (seconds) |
 
 ## Workflow
 
 1. **Detection**: YOLO detects shuttlecocks, ByteTrack assigns tracking IDs, Kalman smooths positions
-2. **Chase**: PD control computes left/right wheel speeds; the robot aligns with the target and drives forward
+2. **Chase**: PD control computes left/right wheel speeds; the robot aligns with the target and drives forward. In ground mode, within 1 m it automatically switches to a creep gear (lower speed, stronger turn gain) and pauses for 1 second to confirm alignment before pickup
 3. **Pickup**: When the target is closer than the threshold (or 0.25 m in ground mode), the robot stops and runs the pickup mechanism for 2 seconds
 4. **Confirmation**: While collecting, the system tracks whether the ball is still visible at its original spot to judge pickup success
 5. **Next target**: On success, picks the next ball in the current frame and drives straight to it; on failure, retries in place, and after too many retries cools down for 10 seconds and skips that ball
 6. **Search**: When nothing is in view, spins in place toward the direction where the ball was last seen
 7. **Obstacle avoidance** (optional): While driving, if an obstacle such as a person blocks the path between the robot and the target, the robot stops and waits; after a block longer than 8 seconds it abandons the target and resumes searching
 8. **Battery protection** (optional): Warns below 10.5V, force-stops the robot and turns off the pickup motor below 10V
+9. **Stuck escape** (ground mode only): If the target distance fails to decrease for 2 seconds while driving, the robot backs up for 0.5 s and turns in place for 0.6 s, then drives toward the ball again; more than 3 escapes on the same ball triggers an 8-second cooldown and skips it
 
 ## Optional: Ground Projection Calibration
 

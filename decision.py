@@ -1,5 +1,6 @@
 import math
 import time
+from collections import deque
 
 from config import (
     CENTER_TOLERANCE,
@@ -23,7 +24,23 @@ from config import (
     USE_OBSTACLE_AVOID,
     OBSTACLE_STOP_DISTANCE_M,
     OBSTACLE_AREA_NEAR,
-    OBSTACLE_BLOCK_TIMEOUT
+    OBSTACLE_BLOCK_TIMEOUT,
+    COLLECT_CONFIRM,
+    COLLECT_CONFIRM_RATIO,
+    COLLECT_CONFIRM_RADIUS,
+    MAX_COLLECT_RETRIES,
+    COLLECT_RETRY_COOLDOWN,
+    USE_STAGED_APPROACH,
+    STAGED_NEAR_DISTANCE_M,
+    STAGED_NEAR_SPEED,
+    STAGED_KP_ANGLE,
+    STAGED_KD_ANGLE,
+    STAGED_SETTLE_TIME,
+    USE_STUCK_DETECT,
+    STUCK_DURATION,
+    STUCK_DISTANCE_EPS,
+    STUCK_MAX_ESCAPES,
+    STUCK_RETRY_COOLDOWN
 )
 
 from ground_projection import GroundProjection
@@ -33,7 +50,7 @@ class DecisionMaker:
     """
     方案 3（比例控制）+ 方案 4（连续丢帧判定）+ 方案 9（地面投影闭环）
     + 方案 10（多球调度）+ 方案 11（捡球确认）+ 方案 12（加速度限幅）
-    + 方案 19（障碍物避障）。
+    + 方案 19（障碍物避障）+ 方案 26（三段式接近）+ 方案 27（卡死脱困）。
 
     两种模式（USE_GROUND_PROJECTION 切换）：
     - 像素模式：水平偏差像素 + 面积估距（方案 3 原逻辑）
@@ -42,7 +59,9 @@ class DecisionMaker:
 
     decide() 返回动作字典：
     - {"action": "COLLECT"}                     启动捡球
+    - {"action": "SETTLE"}                      到位暂停观察（方案 26）
     - {"action": "DRIVE", "left": L, "right": R} 按左右轮速度行驶（PWM 0~255）
+    - {"action": "ESCAPE"}                      判定卡死，请 main 执行脱困（方案 27）
     - {"action": "SEARCH", "direction": ...}    丢目标，按方向搜索
 
     丢失判定逻辑：
@@ -108,6 +127,22 @@ class DecisionMaker:
         # ---- 方案 19：障碍物遮挡状态 ----
         # 障碍物首次挡住目标的时刻（None 表示未遮挡）
         self.blocked_since = None
+
+        # ---- 方案 26：三段式接近状态 ----
+        # 到位暂停观察开始时刻（None 表示未在观察）
+        self.settle_since = None
+
+        # ---- 方案 27：卡死检测与脱困状态（仅地面模式生效） ----
+        # 行驶中的 (time, distance) 历史，仅 DRIVE 期间记录
+        self.stuck_history = deque(maxlen=600)
+        # 当前目标的脱困次数
+        self.stuck_escapes = 0
+        # 触发脱困时的距离基线：之后距离实质缩小则重置计数
+        self.stuck_baseline_d = None
+        # 脱困超限后的冷却截止时间（期间不逼近该目标）
+        self.stuck_cooldown_until = 0.0
+        # 卡死状态所属目标 id（切换目标后整体重置）
+        self.stuck_target_id = None
 
     def estimate_distance(self, area):
         """像素模式：用框面积反推相对距离：distance ≈ C / sqrt(area)"""
@@ -349,7 +384,65 @@ class DecisionMaker:
 
         return None
 
-    # ---- 地面投影模式（方案 9） ----
+    # ---- 地面投影模式（方案 9 + 26 三段式接近 + 27 卡死脱困） ----
+
+    def _reset_stuck_state(self):
+        """方案 27：清空卡死检测状态（换目标/脱困结束/冷却重置时调用）。"""
+        self.stuck_history.clear()
+        self.stuck_escapes = 0
+        self.stuck_baseline_d = None
+        self.stuck_target_id = None
+
+    def after_escape(self):
+        """方案 27：main 完成一次脱困动作后调用。
+
+        清掉卡死历史（重新开始计时），但保留脱困计数与距离基线，
+        以便对同一目标累计脱困次数、判断是否实质脱困。
+        """
+        self.stuck_history.clear()
+
+    def _check_stuck(self, now, distance, bearing):
+        """方案 27：卡死判定。
+
+        记录 (time, distance) 历史，若持续 STUCK_DURATION 秒内距离缩小
+        不足 STUCK_DISTANCE_EPS，判定卡死。
+
+        只在目标大致正前方（|bearing| 较小）时才计入样本，避免"原地转
+        正方向"期间距离不变被误判卡死。
+
+        返回 True 表示该帧应触发脱困（调用方负责计数/冷却处理）。
+        """
+        if not (USE_STUCK_DETECT and self.use_ground):
+            return False
+
+        if distance >= 999.0:
+            # 投影失败（如目标在相机正下方出界），不参与判定
+            return False
+
+        # 只有目标大致在正前方才计入"在行驶"：大角度时机器人多半在
+        # 原地转正方向，距离本就不该缩小，不算卡死
+        if abs(bearing) > 0.5:
+            return False
+
+        self.stuck_history.append((now, distance))
+
+        # 保留 STUCK_DURATION + 余量 内的样本
+        cutoff = now - STUCK_DURATION - 0.5
+        while self.stuck_history and self.stuck_history[0][0] < cutoff:
+            self.stuck_history.popleft()
+
+        # 窗口内样本太少（刚开始行驶）不判定
+        if len(self.stuck_history) < 2:
+            return False
+
+        span = now - self.stuck_history[0][0]
+
+        if span < STUCK_DURATION:
+            return False
+
+        d_oldest = self.stuck_history[0][1]
+        # 窗口内距离缩小不足阈值 -> 卡死
+        return (d_oldest - distance) < STUCK_DISTANCE_EPS
 
     def _decide_ground(self, target):
         bearing, distance = self.projection.bearing_and_distance(
@@ -362,17 +455,87 @@ class DecisionMaker:
         elif bearing > ANGLE_TOLERANCE:
             self.last_seen_direction = "TURN_RIGHT"
 
-        # 距离足够近 -> 捡球
+        now = time.time()
+
+        # 目标切换：卡死状态与 settle 状态只针对同一目标有效
+        tid = target.get("id")
+        if self.stuck_target_id is not None and tid is not None \
+                and tid != self.stuck_target_id:
+            self._reset_stuck_state()
+
+        # 记录当前目标 id（供切换检测用）
+        if tid is not None:
+            self.stuck_target_id = tid
+
+        # ---- 方案 26：近距判断（蠕行档 + settle） ----
+        near = USE_STAGED_APPROACH and distance < STAGED_NEAR_DISTANCE_M
+        aligned = abs(bearing) <= ANGLE_TOLERANCE
+
+        # ---- 方案 26：到位 settle 观察 ----
+        # 近距且方位角已对齐时，先停车观察 STAGED_SETTLE_TIME 秒确认落位，
+        # 再触发 COLLECT，防止投影误差导致没到跟前就开捡
+        if USE_STAGED_APPROACH and near and aligned:
+            if self.settle_since is None:
+                self.settle_since = now
+                # 开始 settle 时清掉历史，避免误判卡死（此时在停车）
+                self.stuck_history.clear()
+                self._limit_accel(0, 0)
+                return {"action": "SETTLE"}
+
+            if now - self.settle_since >= STAGED_SETTLE_TIME:
+                self.settle_since = None
+                # 观察确认落位：进入捡球距离才捡，否则（投影漂移）继续逼近
+                if distance <= COLLECT_DISTANCE_M:
+                    return {"action": "COLLECT"}
+            else:
+                # 继续观察中：保持停车
+                return {"action": "SETTLE"}
+
+        # 离开近距/对齐状态：重置 settle 计时（重新到位时再观察）
+        self.settle_since = None
+
+        # 距离足够近 -> 捡球（非 staged 或 staged 未对齐时的原路径兜底）
         if distance <= COLLECT_DISTANCE_M:
             return {"action": "COLLECT"}
 
-        now = time.time()
+        # ---- 方案 27：脱困冷却期间不逼近，等冷却结束 ----
+        if time.time() < self.stuck_cooldown_until:
+            self._limit_accel(0, 0)
+            return {"action": "SETTLE"}
+
+        # ---- 方案 27：卡死判定（仅在正常行驶中） ----
+        if self._check_stuck(now, distance, bearing):
+            self.stuck_history.clear()
+            self._limit_accel(0, 0)
+
+            if self.stuck_escapes >= STUCK_MAX_ESCAPES:
+                # 脱困超限：冷却跳过该目标
+                self.stuck_cooldown_until = now + STUCK_RETRY_COOLDOWN
+                self._reset_stuck_state()
+                return {"action": "SEARCH",
+                        "direction": self.last_seen_direction}
+
+            self.stuck_escapes += 1
+            self.stuck_baseline_d = distance
+            return {"action": "ESCAPE"}
+
+        # ---- 方案 27：距离实质缩小则重置脱困计数（说明在正常接近） ----
+        if self.stuck_baseline_d is not None \
+                and (self.stuck_baseline_d - distance) >= STUCK_DISTANCE_EPS:
+            self.stuck_baseline_d = None
+            self.stuck_escapes = 0
+
+        # ---- 方案 26：选择 PD 增益与直行速度档位 ----
+        if near:
+            kp_a, kd_a = STAGED_KP_ANGLE, STAGED_KD_ANGLE
+        else:
+            kp_a, kd_a = KP_ANGLE, KD_ANGLE
 
         p_term = bearing  # 弧度，量级约 -1.5 ~ 1.5
 
         d_term = 0.0
         if (
-            KD_ANGLE > 0
+            kd_a > 0
             and self.prev_error is not None
             and self.prev_time is not None
             and now > self.prev_time
@@ -383,27 +546,34 @@ class DecisionMaker:
         self.prev_time = now
 
         # 差速：bearing 正值 = 目标在右侧 -> 右转
-        turn = KP_ANGLE * p_term + KD_ANGLE * d_term
+        turn = kp_a * p_term + kd_a * d_term
         turn = max(-1.0, min(1.0, turn))
 
-        left = int(MAX_SPEED * (1.0 + turn))
-        right = int(MAX_SPEED * (1.0 - turn))
+        # 差速基线速度：近距档用低速，远距档用全速
+        base_speed = STAGED_NEAR_SPEED if near else MAX_SPEED
+
+        left = int(base_speed * (1.0 + turn))
+        right = int(base_speed * (1.0 - turn))
 
         left = max(0, min(255, left))
         right = max(0, min(255, right))
 
         # 方位角已进入死区：直行，速度随距离衰减（近处减速防撞）
-        if abs(bearing) <= ANGLE_TOLERANCE:
-            fwd = int(min(FORWARD_SPEED, distance * FORWARD_DISTANCE_GAIN))
-            fwd = max(fwd, 40)
+        if aligned:
+            speed_cap = STAGED_NEAR_SPEED if near else FORWARD_SPEED
+            fwd = int(min(speed_cap, distance * FORWARD_DISTANCE_GAIN))
+            # 近距蠕行时不再抬到 40（低速更稳），远距保持下限
+            floor = 20 if near else 40
+            fwd = max(fwd, floor)
             left = fwd
             right = fwd
 
-        # 保证低速时电机仍能转动
-        if 0 < left < 40:
-            left = 40
-        if 0 < right < 40:
-            right = 40
+        # 保证低速时电机仍能转动（近距蠕行档跳过抬升，允许更慢）
+        if not near:
+            if 0 < left < 40:
+                left = 40
+            if 0 < right < 40:
+                right = 40
 
         # 方案 12：加速度限幅后下发
         left, right = self._limit_accel(left, right)
