@@ -60,9 +60,20 @@ def draw_debug_info(frame, target, decision):
         2
     )
 
+    # decision 现在是动作字典，显示形式改为 "action | L speed R speed"
+    if isinstance(decision, dict):
+        if decision["action"] == "DRIVE":
+            text = f"DRIVE L:{decision['left']} R:{decision['right']}"
+        else:
+            text = decision["action"]
+            if decision["action"] == "SEARCH":
+                text += f" {decision.get('direction', '')}"
+    else:
+        text = str(decision)
+
     cv2.putText(
         display_frame,
-        f"Decision: {decision}",
+        text,
         (20, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.8,
@@ -73,27 +84,28 @@ def draw_debug_info(frame, target, decision):
     return display_frame
 
 
-def execute_decision(robot, decision, last_command, decision_maker=None):
-    if decision == "SEARCH":
-        # SEARCH 不再使用（DecisionMaker 已内部处理搜索方向），保持兼容
-        if last_command != "TURN_LEFT":
-            robot.turn_left()
-            return "TURN_LEFT"
+def execute_decision(robot, decision, last_command):
+    """
+    执行动作字典（方案 3 比例控制）。
 
-    elif decision == "TURN_LEFT":
-        if last_command != "TURN_LEFT":
-            robot.turn_left()
-            return "TURN_LEFT"
+    DRIVE 是连续控制，每帧都发送 SPEED 指令（速度一直在变，不需要去重）；
+    其它离散动作仍按 last_command 去重，避免重复发送。
+    返回值统一为 last_command 的字符串，供离散动作去重用。
+    """
+    action = decision["action"]
 
-    elif decision == "TURN_RIGHT":
-        if last_command != "TURN_RIGHT":
-            robot.turn_right()
-            return "TURN_RIGHT"
+    if action == "DRIVE":
+        robot.set_speed(decision["left"], decision["right"])
+        return "DRIVE"
 
-    elif decision == "MOVE_FORWARD":
-        if last_command != "MOVE_FORWARD":
-            robot.forward()
-            return "MOVE_FORWARD"
+    if action == "SEARCH":
+        direction = decision["direction"]
+        if last_command != direction:
+            if direction == "TURN_LEFT":
+                robot.turn_left()
+            else:
+                robot.turn_right()
+            return direction
 
     return last_command
 
@@ -122,7 +134,7 @@ def main():
         collect_start_time = None
         is_collecting = False
 
-        print("Program started with YOLO detector.")
+        print("Program started with YOLO detector (proportional control).")
         print("Press Q to quit.")
 
         while True:
@@ -144,10 +156,10 @@ def main():
                     collect_start_time = None
                     last_command = "STOP"
                 else:
-                    decision = "COLLECTING"
+                    decision = {"action": "COLLECTING"}
 
             else:
-                if decision == "COLLECT":
+                if decision["action"] == "COLLECT":
                     robot.stop()
                     time.sleep(0.2)
                     robot.collect_on()
@@ -155,9 +167,7 @@ def main():
                     is_collecting = True
                     last_command = "COLLECT_ON"
                 else:
-                    last_command = execute_decision(
-                        robot, decision, last_command, decision_maker
-                    )
+                    last_command = execute_decision(robot, decision, last_command)
 
             display_frame = draw_debug_info(frame, target, decision)
 
