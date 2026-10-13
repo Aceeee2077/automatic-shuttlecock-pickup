@@ -73,8 +73,9 @@ def draw_debug_info(frame, target, decision):
     return display_frame
 
 
-def execute_decision(robot, decision, last_command):
+def execute_decision(robot, decision, last_command, decision_maker=None):
     if decision == "SEARCH":
+        # SEARCH 不再使用（DecisionMaker 已内部处理搜索方向），保持兼容
         if last_command != "TURN_LEFT":
             robot.turn_left()
             return "TURN_LEFT"
@@ -98,77 +99,91 @@ def execute_decision(robot, decision, last_command):
 
 
 def main():
+    camera = None
+    robot = None
+
     try:
-        camera = Camera()
-    except RuntimeError as e:
-        print(e)
-        return
+        try:
+            camera = Camera()
+        except RuntimeError as e:
+            print(e)
+            return
 
-    robot = RobotController(
-        use_serial=USE_SERIAL,
-        port=SERIAL_PORT,
-        baud_rate=BAUD_RATE
-    )
+        robot = RobotController(
+            use_serial=USE_SERIAL,
+            port=SERIAL_PORT,
+            baud_rate=BAUD_RATE
+        )
 
-    detector = ShuttleDetector()
-    decision_maker = DecisionMaker(FRAME_WIDTH)
+        detector = ShuttleDetector()
+        decision_maker = DecisionMaker(FRAME_WIDTH)
 
-    last_command = None
-    collect_start_time = None
-    is_collecting = False
+        last_command = None
+        collect_start_time = None
+        is_collecting = False
 
-    print("Program started with YOLO detector.")
-    print("Press Q to quit.")
+        print("Program started with YOLO detector.")
+        print("Press Q to quit.")
 
-    while True:
-        frame = camera.read()
+        while True:
+            frame = camera.read()
 
-        if frame is None:
-            print("Cannot read frame.")
-            break
+            if frame is None:
+                print("Cannot read frame.")
+                break
 
-        target, mask = detector.detect(frame)
+            target, mask = detector.detect(frame)
 
-        decision = decision_maker.decide(target)
+            decision = decision_maker.decide(target)
 
-        if is_collecting:
-            if time.time() - collect_start_time >= COLLECT_TIME:
-                robot.collect_off()
-                robot.stop()
-                is_collecting = False
-                collect_start_time = None
-                last_command = "STOP"
+            if is_collecting:
+                if time.time() - collect_start_time >= COLLECT_TIME:
+                    robot.collect_off()
+                    robot.stop()
+                    is_collecting = False
+                    collect_start_time = None
+                    last_command = "STOP"
+                else:
+                    decision = "COLLECTING"
+
             else:
-                decision = "COLLECTING"
+                if decision == "COLLECT":
+                    robot.stop()
+                    time.sleep(0.2)
+                    robot.collect_on()
+                    collect_start_time = time.time()
+                    is_collecting = True
+                    last_command = "COLLECT_ON"
+                else:
+                    last_command = execute_decision(
+                        robot, decision, last_command, decision_maker
+                    )
 
-        else:
-            if decision == "COLLECT":
-                robot.stop()
-                time.sleep(0.2)
-                robot.collect_on()
-                collect_start_time = time.time()
-                is_collecting = True
-                last_command = "COLLECT_ON"
-            else:
-                last_command = execute_decision(robot, decision, last_command)
+            display_frame = draw_debug_info(frame, target, decision)
 
-        display_frame = draw_debug_info(frame, target, decision)
+            cv2.imshow("Robot Camera YOLO", display_frame)
 
-        cv2.imshow("Robot Camera YOLO", display_frame)
+            if SHOW_MASK_WINDOW and mask is not None:
+                cv2.imshow("Mask", mask)
 
-        if SHOW_MASK_WINDOW and mask is not None:
-            cv2.imshow("Mask", mask)
+            key = cv2.waitKey(1) & 0xFF
 
-        key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
 
-        if key == ord("q"):
-            break
+    except KeyboardInterrupt:
+        print("\nStopped by user (Ctrl+C).")
+    finally:
+        # 无论正常退出还是 Ctrl+C 中断，都确保机器人停止、资源释放
+        if robot is not None:
+            robot.stop()
+            robot.collect_off()
+            robot.close()
 
-    robot.stop()
-    robot.collect_off()
-    robot.close()
-    camera.release()
-    cv2.destroyAllWindows()
+        if camera is not None:
+            camera.release()
+
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
