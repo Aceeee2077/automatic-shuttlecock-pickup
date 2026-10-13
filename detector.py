@@ -54,6 +54,9 @@ class ShuttleDetector:
         )
         self.last_meas_time = None
 
+        # 本帧全部候选框（不做平滑/选择），供捡球确认和多球调度使用
+        self.last_candidates = []
+
     def _ema_update(self, prev, cur):
         """对框尺寸和面积做指数滑动平均。"""
         a = EMA_ALPHA
@@ -123,6 +126,7 @@ class ShuttleDetector:
 
         if result.boxes is None or len(result.boxes) == 0:
             # 单帧漏检：优先外推轨迹，否则回放旧结果并标记 missed
+            self.last_candidates = []
             extrapolated = self._extrapolate()
 
             if extrapolated is not None:
@@ -170,6 +174,9 @@ class ShuttleDetector:
                 "id": track_id
             })
 
+        # 保存本帧全部候选框（供捡球确认和多球调度使用）
+        self.last_candidates = candidates
+
         if len(candidates) == 0:
             extrapolated = self._extrapolate()
 
@@ -216,6 +223,25 @@ class ShuttleDetector:
 
         return output, None
 
+    def aim_at(self, box):
+        """多球调度（方案 10）：把跟踪焦点切到指定候选框。
+
+        - 有跟踪 ID 时锁定该框的 ID（ByteTrack 继续稳定关联）
+        - 无 ID（未启用跟踪）时用 Kalman 直接重置到新框中心，
+          避免旧速度外拉
+        """
+        self.locked_id = box["id"]
+
+        cx = box["x"] + box["w"] / 2.0
+        cy = box["y"] + box["h"]
+
+        if USE_KALMAN:
+            self.kalman.reset_to(cx, cy)
+
+        self.smoothed = dict(box)
+        self.smoothed["x"] = int(cx - box["w"] / 2.0)
+        self.smoothed["y"] = int(cy - box["h"])
+
     def reset(self):
         """丢帧超限后由决策层调用：清空平滑状态和 ID 锁定。"""
         self.smoothed = None
@@ -224,3 +250,4 @@ class ShuttleDetector:
             KALMAN_POS_NOISE, KALMAN_VEL_NOISE, KALMAN_MEAS_NOISE
         )
         self.last_meas_time = None
+        self.last_candidates = []

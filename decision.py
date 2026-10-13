@@ -15,7 +15,9 @@ from config import (
     KP_ANGLE,
     KD_ANGLE,
     FORWARD_DISTANCE_GAIN,
-    COLLECT_DISTANCE_M
+    COLLECT_DISTANCE_M,
+    MULTI_BALL,
+    NEXT_TARGET_MIN_SEP
 )
 
 from ground_projection import GroundProjection
@@ -23,7 +25,8 @@ from ground_projection import GroundProjection
 
 class DecisionMaker:
     """
-    方案 3（比例控制）+ 方案 4（连续丢帧判定）+ 方案 9（地面投影闭环）。
+    方案 3（比例控制）+ 方案 4（连续丢帧判定）+ 方案 9（地面投影闭环）
+    + 方案 10（多球调度）+ 方案 11（捡球确认）。
 
     两种模式（USE_GROUND_PROJECTION 切换）：
     - 像素模式：水平偏差像素 + 面积估距（方案 3 原逻辑）
@@ -40,6 +43,21 @@ class DecisionMaker:
       miss_count 递增，但继续按盲走方向行驶
     - 连续 MISS_FRAME_LIMIT 帧没有真正检测到目标，才判定真丢失进入 SEARCH
     - missed 结果不允许触发 COLLECT（防止对着旧位置捡球）
+
+    捡球确认逻辑（方案 11）：
+    - 进入 COLLECT 时记录被捡球中心，捡球期间 main 每帧调用
+      observe_collecting()，统计"该位置附近仍看到球"的帧占比
+    - finish_collecting() 在捡球结束时判定：占比超过
+      COLLECT_CONFIRM_RATIO 判定失败（球没被捡走），返回 True 表示
+      失败，main 就地重试；不超过则判定成功
+    - 连续失败 MAX_COLLECT_RETRIES 次后进入冷却（COLLECT_RETRY_COOLDOWN
+      秒），冷却期间 COLLECT 动作替换为 SEARCH，防止卡死在坏球上
+
+    多球调度逻辑（方案 10）：
+    - plan_next_target() 在捡球结束时从本帧候选框里挑下一个目标：
+      排除被捡球位置附近的框（防止把同一颗球当两颗），选分数最高的
+    - 找到则返回候选框字典，main 调用 detector.aim_at() 切换焦点，
+      下一帧直接驶向新目标；找不到返回 None，退回正常 SEARCH
     """
 
     def __init__(self, frame_width, projection=None):
@@ -60,6 +78,20 @@ class DecisionMaker:
 
         # 连续丢失帧计数
         self.miss_count = 0
+
+        # ---- 方案 11：捡球确认状态 ----
+        # 进入 COLLECT 时被捡球中心
+        self.collecting_center = None
+        # 捡球期间总帧数 / 球仍可见帧数
+        self.collecting_frames = 0
+        self.collecting_visible_frames = 0
+
+        # ---- 方案 11：失败重试与冷却 ----
+        self.collect_retries = 0
+        self.cooldown_until = 0.0
+
+        # ---- 方案 10：被捡球中心（多球换目标时排除用） ----
+        self.last_collected_center = None
 
     def estimate_distance(self, area):
         """像素模式：用框面积反推相对距离：distance ≈ C / sqrt(area)"""
@@ -95,9 +127,118 @@ class DecisionMaker:
         self.miss_count = 0
 
         if self.use_ground:
-            return self._decide_ground(target)
+            action = self._decide_ground(target)
+        else:
+            action = self._decide_pixel(target)
 
-        return self._decide_pixel(target)
+        # 方案 11：捡球冷却期间不触发 COLLECT，替换为 SEARCH
+        if (
+            action["action"] == "COLLECT"
+            and time.time() < self.cooldown_until
+        ):
+            self._reset_pd_state()
+            return {"action": "SEARCH", "direction": self.last_seen_direction}
+
+        return action
+
+    # ---- 方案 11：捡球确认 ----
+
+    def start_collecting(self, target):
+        """进入 COLLECT 时调用：记录被捡球中心，重置确认统计。"""
+        self.collecting_center = (
+            target["x"] + target["w"] / 2.0,
+            target["y"] + target["h"]
+        )
+        self.collecting_frames = 0
+        self.collecting_visible_frames = 0
+
+    def observe_collecting(self, target):
+        """捡球期间每帧调用：统计被捡球位置附近是否仍有球。
+
+        detector 检测到目标且中心落在被捡球中心 COLLECT_CONFIRM_RADIUS
+        内时，认为"球仍在原地"（即没被捡走）。
+        """
+        if self.collecting_center is None:
+            return
+
+        self.collecting_frames += 1
+
+        if target is None or target.get("missed", False):
+            return
+
+        cx = target["x"] + target["w"] / 2.0
+        cy = target["y"] + target["h"]
+
+        dx = cx - self.collecting_center[0]
+        dy = cy - self.collecting_center[1]
+
+        if math.hypot(dx, dy) <= COLLECT_CONFIRM_RADIUS:
+            self.collecting_visible_frames += 1
+
+    def finish_collecting(self, candidates):
+        """捡球结束时调用：判定是否成功，并尝试规划下一个目标。
+
+        返回 (collect_failed, next_target)：
+        - collect_failed: True 表示球没被捡走（可见占比超阈值），
+          main 应就地重试
+        - next_target: 方案 10 的下一个目标候选框，找不到为 None
+        """
+        collect_failed = False
+
+        if COLLECT_CONFIRM and self.collecting_center is not None:
+            ratio = (
+                self.collecting_visible_frames / self.collecting_frames
+                if self.collecting_frames > 0
+                else 0.0
+            )
+            collect_failed = ratio >= COLLECT_CONFIRM_RATIO
+
+        if collect_failed:
+            self.collect_retries += 1
+
+            if self.collect_retries > MAX_COLLECT_RETRIES:
+                # 重试超限：进入冷却，放弃这颗球
+                self.cooldown_until = time.time() + COLLECT_RETRY_COOLDOWN
+                self.collect_retries = 0
+        else:
+            self.collect_retries = 0
+
+        # 方案 10：成功捡到球（或确认关闭）时记录位置，供换目标排除用
+        if not collect_failed:
+            self.last_collected_center = self.collecting_center
+            self.collecting_center = None
+            self.collecting_frames = 0
+            self.collecting_visible_frames = 0
+
+        next_target = None
+
+        if MULTI_BALL and not collect_failed:
+            next_target = self._plan_next_target(candidates)
+
+        return collect_failed, next_target
+
+    def _plan_next_target(self, candidates):
+        """从本帧候选框中挑选下一个目标（排除刚捡完球的位置附近）。"""
+        if not candidates:
+            return None
+
+        center = self.last_collected_center
+
+        for cand in candidates:
+            if center is None:
+                return cand
+
+            cx = cand["x"] + cand["w"] / 2.0
+            cy = cand["y"] + cand["h"]
+
+            dx = cx - center[0]
+            dy = cy - center[1]
+
+            # 离被捡球位置足够远才是新球
+            if math.hypot(dx, dy) >= NEXT_TARGET_MIN_SEP:
+                return cand
+
+        return None
 
     # ---- 地面投影模式（方案 9） ----
 

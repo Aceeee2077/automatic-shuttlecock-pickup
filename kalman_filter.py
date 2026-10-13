@@ -83,3 +83,9 @@ class ConstantVelocityKalman:
     def get_velocity(self):
         """返回当前估计的像素速度 (vx, vy)。"""
         return self.x[2], self.x[3]
+
+    def reset_to(self, cx, cy):
+        """多球调度（方案 10）：切换目标时重置状态到新位置，速度清零。"""
+        self.x[:] = (cx, cy, 0.0, 0.0)
+        self.P = np.eye(4, dtype=np.float64) * 100.0
+        self.initialized = True

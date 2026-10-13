@@ -211,12 +211,34 @@ def main():
                 )
 
             if is_collecting:
+                # 捡球期间每帧观察：被捡球位置附近是否仍有球（方案 11）
+                decision_maker.observe_collecting(target)
+
                 if time.time() - collect_start_time >= COLLECT_TIME:
                     robot.collect_off()
                     robot.stop()
+
+                    # 方案 11：视觉确认捡球是否成功
+                    collect_failed, next_target = (
+                        decision_maker.finish_collecting(
+                            detector.last_candidates
+                        )
+                    )
+
                     is_collecting = False
                     collect_start_time = None
-                    last_command = "STOP"
+
+                    if collect_failed:
+                        # 失败：就地重试（重新驶向同一位置触发 COLLECT）
+                        print("Collect failed, retrying.")
+                        last_command = None
+                    elif next_target is not None:
+                        # 方案 10：找到下一个目标，直接切换焦点驶向它
+                        print("Next target found, switching.")
+                        detector.aim_at(next_target)
+                        last_command = None
+                    else:
+                        last_command = "STOP"
                 else:
                     decision = {"action": "COLLECTING"}
                     # 捡球期间不发行驶指令，但需要发心跳防止 Arduino 看门狗误停车
@@ -224,6 +246,7 @@ def main():
 
             else:
                 if decision["action"] == "COLLECT":
+                    decision_maker.start_collecting(target)
                     robot.stop()
                     time.sleep(0.2)
                     robot.collect_on()
