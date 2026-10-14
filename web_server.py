@@ -1,5 +1,5 @@
 """
-方案 22：Web 远程监控。
+Web 远程监控。
 
 用 Python 标准库 http.server 实现（无第三方依赖）：
 - GET /        ：监控页面（单文件 HTML，内嵌状态轮询 + MJPEG 显示）

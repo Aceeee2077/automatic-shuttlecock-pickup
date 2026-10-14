@@ -3,7 +3,7 @@ import numpy as np
 
 class ConstantVelocityKalman:
     """
-    方案 8：匀速模型 Kalman 滤波，平滑目标框底边中心 (cx, cy)。
+    匀速模型 Kalman 滤波，平滑目标框底边中心 (cx, cy)。
 
     相比 EMA：
     - 漏检期间可以 predict() 外推目标运动轨迹，盲走更聪明

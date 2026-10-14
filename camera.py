@@ -8,7 +8,7 @@ from config import CAMERA_INDEX, FRAME_WIDTH, FRAME_HEIGHT
 
 class Camera:
     """
-    方案 7：后台线程读帧。
+    后台线程读帧。
 
     推理慢时相机缓冲会积压，串行 read() 拿到的是几百毫秒前的旧画面。
     改为后台线程持续 grab() 并只保留最新一帧，主循环 retrieve() 时

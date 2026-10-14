@@ -23,7 +23,7 @@ from kalman_filter import ConstantVelocityKalman
 
 class ShuttleDetector:
     """
-    方案 4（ByteTrack 跟踪）+ 方案 8（Kalman 平滑）+ 方案 19（障碍物检测）。
+    目标检测层：ByteTrack 跟踪 + Kalman 平滑 + 障碍物检测。
 
     - model.track 获得稳定的目标 ID，位置逐帧关联，单帧检测噪声被跟踪器吸收
     - 位置 (cx, cy) 用匀速模型 Kalman 平滑；漏检期间 predict() 外推轨迹，
