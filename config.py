@@ -253,3 +253,30 @@ STUCK_MAX_ESCAPES = 3
 
 # 脱困超限后的冷却时间（秒），期间不逼近该目标
 STUCK_RETRY_COOLDOWN = 8.0
+
+# =========================
+# 运行日志与离线回放（方案 43）
+# =========================
+
+# 启用后每帧存 JPEG + JSON 到 runs/replay/run_<时间戳>/，
+# 用 replay_viewer.py 可拖时间轴回放调试
+USE_RUN_LOGGER = True
+
+# 日志根目录
+RUN_LOG_DIR = "runs/replay"
+
+# 日志帧 JPEG 质量（1~100）
+RUN_LOG_JPEG_QUALITY = 85
+
+# 每 N 帧存一帧（1 = 每帧都存）；磁盘紧张可调 2
+RUN_LOG_EVERY_N_FRAMES = 1
+
+# =========================
+# 直行标定（方案 38）
+# =========================
+
+# 直行标定文件：calibrate_drive.py 生成的左右轮速度修正系数
+DRIVE_CALIBRATION_PATH = "drive_calibration.json"
+
+# 是否应用直行标定修正（False 时下发速度不修正）
+USE_DRIVE_CALIBRATION = True

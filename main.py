@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import cv2
 import time
 
@@ -22,7 +25,13 @@ from config import (
     STUCK_REVERSE_SECONDS,
     STUCK_REVERSE_SPEED,
     STUCK_TURN_SECONDS,
-    STUCK_TURN_SPEED
+    STUCK_TURN_SPEED,
+    USE_RUN_LOGGER,
+    RUN_LOG_DIR,
+    RUN_LOG_JPEG_QUALITY,
+    RUN_LOG_EVERY_N_FRAMES,
+    USE_DRIVE_CALIBRATION,
+    DRIVE_CALIBRATION_PATH
 )
 
 from camera import Camera
@@ -30,6 +39,67 @@ from detector import ShuttleDetector
 from decision import DecisionMaker
 from robot_controller import RobotController
 from ground_projection import GroundProjection
+
+
+def load_drive_calibration():
+    """读取直行标定系数；文件不存在或损坏时返回 (1.0, 1.0)。"""
+    path = Path(DRIVE_CALIBRATION_PATH)
+
+    if not path.is_file():
+        return 1.0, 1.0
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return (
+            float(data.get("left_factor", 1.0)),
+            float(data.get("right_factor", 1.0))
+        )
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Drive calibration file invalid ({e}), using 1.0/1.0.")
+        return 1.0, 1.0
+
+
+def _log_record(decision, target, miss_count, ground_info, obstacle,
+                battery_mv, collected_count, obstacle_state):
+    """组装一帧的日志记录（不含图像本体）。"""
+    record = {
+        "action": decision.get("action") if isinstance(decision, dict) else str(decision),
+        "miss": miss_count,
+        "collected": collected_count,
+        "battery_mv": battery_mv,
+        "obstacle_state": obstacle_state,
+    }
+
+    if isinstance(decision, dict):
+        if decision["action"] == "DRIVE":
+            record["left"] = decision["left"]
+            record["right"] = decision["right"]
+        if decision["action"] == "SEARCH":
+            record["search_dir"] = decision.get("direction", "")
+
+    if target is not None:
+        record["target"] = {
+            "x": int(target["x"]), "y": int(target["y"]),
+            "w": int(target["w"]), "h": int(target["h"]),
+            "conf": round(target.get("confidence", 0.0), 3),
+            "id": target.get("id"),
+            "missed": target.get("missed", False),
+        }
+
+    if obstacle is not None:
+        record["obstacle"] = {
+            "x": int(obstacle["x"]), "y": int(obstacle["y"]),
+            "w": int(obstacle["w"]), "h": int(obstacle["h"]),
+            "cls": obstacle.get("cls", "?"),
+            "conf": round(obstacle.get("confidence", 0.0), 3),
+        }
+
+    if ground_info is not None:
+        bearing, distance = ground_info
+        record["bearing"] = round(bearing, 3)
+        record["distance_m"] = round(distance, 3)
+
+    return record
 
 
 def draw_debug_info(
@@ -265,6 +335,7 @@ def _web_status(decision, collected_count, battery_mv, obstacle,
 def main():
     camera = None
     robot = None
+    run_logger = None
 
     try:
         try:
@@ -273,10 +344,24 @@ def main():
             print(e)
             return
 
+        # 方案 38：加载直行标定系数（无标定文件时系数为 1.0，等价于不修正）
+        left_factor, right_factor = (1.0, 1.0)
+
+        if USE_DRIVE_CALIBRATION:
+            left_factor, right_factor = load_drive_calibration()
+
+            if left_factor != 1.0 or right_factor != 1.0:
+                print(
+                    f"Drive calibration applied: "
+                    f"L x{left_factor:.4f} R x{right_factor:.4f}"
+                )
+
         robot = RobotController(
             use_serial=USE_SERIAL,
             port=SERIAL_PORT,
-            baud_rate=BAUD_RATE
+            baud_rate=BAUD_RATE,
+            left_factor=left_factor,
+            right_factor=right_factor
         )
 
         detector = ShuttleDetector()
@@ -294,6 +379,17 @@ def main():
                 return
 
         decision_maker = DecisionMaker(FRAME_WIDTH, projection=projection)
+
+        # 方案 43：运行日志（可选），每帧 JPEG + JSON 落盘供离线回放
+        if USE_RUN_LOGGER:
+            from run_logger import RunLogger
+
+            run_logger = RunLogger(
+                root_dir=RUN_LOG_DIR,
+                jpeg_quality=RUN_LOG_JPEG_QUALITY,
+                every_n_frames=RUN_LOG_EVERY_N_FRAMES
+            )
+            run_logger.event("run_config", mode=mode)
 
         # 方案 22：Web 远程监控（可选）
         web_server = None
@@ -367,6 +463,17 @@ def main():
                         )
                     )
 
+                # 方案 43：严重低电压停车期间也记帧
+                if run_logger is not None:
+                    run_logger.log_frame(
+                        display_frame,
+                        _log_record(
+                            decision, target, decision_maker.miss_count,
+                            None, obstacle, battery_mv,
+                            collected_count, obstacle_state
+                        )
+                    )
+
                 cv2.imshow("Robot Camera YOLO", display_frame)
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -383,6 +490,9 @@ def main():
                 if now - last_low_batt_warn >= 5.0:
                     last_low_batt_warn = now
                     print(f"Battery low: {battery_mv}mV.")
+
+                    if run_logger is not None:
+                        run_logger.event("battery_low", mv=battery_mv)
 
             decision = decision_maker.decide(target)
 
@@ -414,15 +524,29 @@ def main():
                     if collect_failed:
                         # 失败：就地重试（重新驶向同一位置触发 COLLECT）
                         print("Collect failed, retrying.")
+
+                        if run_logger is not None:
+                            run_logger.event("collect_failed")
+
                         last_command = None
                     elif next_target is not None:
                         # 方案 10：找到下一个目标，直接切换焦点驶向它
                         print("Next target found, switching.")
+
+                        if run_logger is not None:
+                            run_logger.event("collect_success",
+                                             collected=collected_count + 1)
+
                         detector.aim_at(next_target)
                         collected_count += 1
                         last_command = None
                     else:
                         collected_count += 1
+
+                        if run_logger is not None:
+                            run_logger.event("collect_success",
+                                             collected=collected_count)
+
                         last_command = "STOP"
                 else:
                     decision = {"action": "COLLECTING"}
@@ -433,6 +557,10 @@ def main():
                 # 方案 19：障碍物挡路处理
                 if obstacle_state == "giveup":
                     # 持续遮挡超时：放弃该目标，进入搜索
+
+                    if run_logger is not None:
+                        run_logger.event("obstacle_giveup")
+
                     decision_maker._reset_pd_state()
                     detector.reset()
                     decision = {
@@ -456,8 +584,14 @@ def main():
                     collect_start_time = time.time()
                     is_collecting = True
                     last_command = "COLLECT_ON"
+
+                    if run_logger is not None:
+                        run_logger.event("collect_start")
                 elif decision["action"] == "ESCAPE":
                     # 方案 27：判定卡死，执行脱困（后退 + 原地转）
+                    if run_logger is not None:
+                        run_logger.event("escape")
+
                     execute_escape(robot, decision_maker)
                     # 脱困后重置 PD/指令去重，下一帧重新驶向目标
                     last_command = None
@@ -470,6 +604,17 @@ def main():
                 ground_info, obstacle, battery_mv, collected_count,
                 obstacle_state
             )
+
+            # 方案 43：每帧落盘（带调试标注的帧，回放时与现场屏幕一致）
+            if run_logger is not None:
+                run_logger.log_frame(
+                    display_frame,
+                    _log_record(
+                        decision, target, decision_maker.miss_count,
+                        ground_info, obstacle, battery_mv,
+                        collected_count, obstacle_state
+                    )
+                )
 
             # 方案 22：推送到 Web 监控
             if web_server is not None:
@@ -505,6 +650,9 @@ def main():
 
         if web_server is not None:
             web_server.stop()
+
+        if run_logger is not None:
+            run_logger.close()
 
         cv2.destroyAllWindows()
 

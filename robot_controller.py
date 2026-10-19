@@ -1,12 +1,21 @@
+import json
 import time
 import threading
+from pathlib import Path
+
 import serial
 
 
 class RobotController:
-    def __init__(self, use_serial=False, port="COM3", baud_rate=115200):
+    def __init__(self, use_serial=False, port="COM3", baud_rate=115200,
+                 left_factor=1.0, right_factor=1.0):
         self.use_serial = use_serial
         self.serial_conn = None
+
+        # 直行标定修正系数（calibrate_drive.py 生成）：
+        # 左轮真实偏快时 left_factor<1，下发前乘以系数抵消轮速差
+        self.left_factor = left_factor
+        self.right_factor = right_factor
 
         # 方案 20：固件上报状态（电池电压 mV）
         self.battery_mv = None
@@ -71,9 +80,12 @@ class RobotController:
             self.serial_conn.write((command + "\n").encode("utf-8"))
 
     def set_speed(self, left, right):
-        """差速行驶：left/right 为 PWM 速度 0~255，发给 Arduino 做 analogWrite。"""
-        left = int(max(0, min(255, left)))
-        right = int(max(0, min(255, right)))
+        """差速行驶：left/right 为 PWM 速度 0~255，发给 Arduino 做 analogWrite。
+
+        下发前乘以直行标定修正系数，抵消左右轮真实速度差。
+        """
+        left = int(max(0, min(255, left * self.left_factor)))
+        right = int(max(0, min(255, right * self.right_factor)))
         self.send_command(f"SPEED {left} {right}")
 
     def forward(self):
