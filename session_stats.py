@@ -32,6 +32,7 @@ class SessionStats:
         self.escapes = 0
         self.obstacle_giveups = 0
         self.target_switches = 0
+        self.camera_stale_events = 0
 
     # ---- per-frame ----
 
@@ -59,6 +60,9 @@ class SessionStats:
 
     def record_target_switch(self):
         self.target_switches += 1
+
+    def record_camera_stale(self):
+        self.camera_stale_events += 1
 
     # ---- derived values ----
 
@@ -99,6 +103,7 @@ class SessionStats:
             "escapes": self.escapes,
             "obstacle_giveups": self.obstacle_giveups,
             "target_switches": self.target_switches,
+            "camera_stale_events": self.camera_stale_events,
         }
 
     def summary_lines(self):
@@ -122,6 +127,7 @@ class SessionStats:
                 data["obstacle_giveups"],
                 data["target_switches"],
             ),
+            "  camera stale events: %d" % data["camera_stale_events"],
         ]
 
     def print_summary(self, stream=None):

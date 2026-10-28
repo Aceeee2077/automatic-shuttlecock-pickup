@@ -22,6 +22,7 @@
 | 卡死检测脱困 | 持续行驶但目标距离不缩小判卡死，自动后退 + 原地转脱困；同目标脱困超限进入冷却跳过该球 |
 | 安全退出 | Ctrl+C 或按 Q 退出时自动停车、关闭捡球机构、释放资源 |
 | 串口看门狗 | 固件侧 500ms 无指令自动停车，捡球期间发心跳保活 |
+| 画面看门狗 | 超过 `CAMERA_STALE_TIMEOUT` 没有新帧立即停车，画面卡死时不会按旧画面继续行驶；恢复后自动继续 |
 | 启动自检 | 启动前校验 `config.py` 数值范围、电量阈值顺序、模型与标定文件；错误直接阻止启动，警告继续运行 |
 
 ## 项目结构
@@ -33,6 +34,7 @@ automatic_shuttlecock_pickup
 ├── config.py                # 全部参数集中配置（含各方案开关）
 ├── preflight.py             # 启动自检：参数范围、电量阈值、模型/标定文件
 ├── session_stats.py         # 运行统计：时长、帧率、捡球成功率、脱困/放弃次数
+├── camera_watchdog.py       # 画面看门狗：检测相机卡死（只返回旧帧）
 ├── camera.py                # 相机：后台线程读帧，只保留最新帧
 ├── detector.py              # YOLO 检测 + ByteTrack 跟踪 + Kalman 平滑
 ├── kalman_filter.py         # 匀速模型 Kalman 滤波器
@@ -88,6 +90,7 @@ python -m unittest discover -s tests -v
 | `CONFIDENCE_THRESHOLD` | `0.6` | YOLO 置信度阈值，误检多就调高 |
 | `MAX_SPEED` | `200` | 电机 PWM 上限（0~255） |
 | `CENTER_TOLERANCE` | `80` | 像素模式转向死区（像素） |
+| `CAMERA_STALE_TIMEOUT` | `2.0` | 相机画面卡死判定（秒），超时没有新帧立即停车 |
 | `USE_TRACKER` | `True` | ByteTrack 跟踪开关 |
 | `USE_KALMAN` | `True` | Kalman 滤波开关，False 退回 EMA |
 | `USE_GROUND_PROJECTION` | `False` | 地面投影模式开关，需先标定 |

@@ -76,6 +76,7 @@ class SessionStatsTests(unittest.TestCase):
         stats.record_escape()
         stats.record_obstacle_giveup()
         stats.record_target_switch()
+        stats.record_camera_stale()
 
         data = stats.snapshot()
         self.assertEqual(data["collect_attempts"], 2)
@@ -84,6 +85,7 @@ class SessionStatsTests(unittest.TestCase):
         self.assertEqual(data["escapes"], 1)
         self.assertEqual(data["obstacle_giveups"], 1)
         self.assertEqual(data["target_switches"], 1)
+        self.assertEqual(data["camera_stale_events"], 1)
 
     def test_success_rate_uses_finished_attempts(self):
         stats, _ = self.make()

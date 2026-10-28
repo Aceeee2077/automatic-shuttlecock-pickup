@@ -22,6 +22,7 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 | Stuck detection & escape | If the target distance stops decreasing while driving, the robot is judged stuck and automatically backs up then turns in place to escape; too many escapes on the same ball triggers a cooldown and skips it |
 | Safe shutdown | Ctrl+C or Q automatically stops the robot, turns off the pickup motor, and releases resources |
 | Serial watchdog | Firmware-side 500ms command timeout auto-stop; heartbeat keeps the pickup motor alive during collection |
+| Camera watchdog | No new frame for `CAMERA_STALE_TIMEOUT` seconds stops the robot immediately, so a frozen stream never drives on old frames; driving resumes after recovery |
 | Startup preflight | Checks `config.py` value ranges, battery threshold ordering, model and calibration files before startup; errors block startup, warnings let it continue |
 
 ## Project Structure
@@ -33,6 +34,7 @@ automatic_shuttlecock_pickup
 ├── config.py                # Centralized configuration (with per-feature switches)
 ├── preflight.py             # Startup checks: value ranges, battery ordering, model/calibration files
 ├── session_stats.py         # Run statistics: uptime, FPS, pickup success rate, escapes, give-ups
+├── camera_watchdog.py       # Stale-stream detection (driver returning old frames)
 ├── camera.py                # Camera: background thread reads frames, keeps the latest only
 ├── detector.py              # YOLO detection + ByteTrack tracking + Kalman smoothing
 ├── kalman_filter.py         # Constant-velocity Kalman filter
@@ -88,6 +90,7 @@ All parameters live in `config.py`. Common ones:
 | `CONFIDENCE_THRESHOLD` | `0.6` | YOLO confidence threshold; raise it if false positives appear |
 | `MAX_SPEED` | `200` | Motor PWM limit (0–255) |
 | `CENTER_TOLERANCE` | `80` | Pixel-mode steering dead zone (pixels) |
+| `CAMERA_STALE_TIMEOUT` | `2.0` | Frozen-camera timeout (seconds); no new frame for this long stops the robot |
 | `USE_TRACKER` | `True` | ByteTrack tracking switch |
 | `USE_KALMAN` | `True` | Kalman filter switch; False falls back to EMA |
 | `USE_GROUND_PROJECTION` | `False` | Ground projection switch; calibrate first |

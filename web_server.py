@@ -156,6 +156,7 @@ PAGE_HTML = """<!DOCTYPE html>
   <span id="attempts">-</span>
   <span id="escapes">-</span>
   <span id="giveups">-</span>
+  <span id="camera">-</span>
 </div>
 <script>
 function lowMv(s) { return s.battery_low_mv ?? 10500; }
@@ -216,6 +217,8 @@ async function poll() {
       "脱困: " + (st.escapes ?? 0);
     document.getElementById("giveups").textContent =
       "避障放弃: " + (st.obstacle_giveups ?? 0);
+    document.getElementById("camera").textContent =
+      "画面卡死: " + (st.camera_stale_events ?? 0);
   } catch (e) { /* 服务未就绪时静默重试 */ }
 }
 setInterval(poll, 1000);

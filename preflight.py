@@ -90,6 +90,7 @@ def validate_config(cfg, base_dir=".", file_exists=None):
 
     _number(report, cfg, "FRAME_WIDTH", 1, 10000)
     _number(report, cfg, "FRAME_HEIGHT", 1, 10000)
+    _number(report, cfg, "CAMERA_STALE_TIMEOUT", 0.1, 60)
     _number(report, cfg, "BAUD_RATE", 1, 4000000)
 
     use_serial = bool(getattr(cfg, "USE_SERIAL", False))

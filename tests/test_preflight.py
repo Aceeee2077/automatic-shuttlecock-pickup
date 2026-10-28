@@ -14,6 +14,7 @@ def base_config(**overrides):
         BAUD_RATE=115200,
         FRAME_WIDTH=1280,
         FRAME_HEIGHT=720,
+        CAMERA_STALE_TIMEOUT=2.0,
         MAX_SPEED=200,
         FORWARD_SPEED=200,
         CENTER_TOLERANCE=80,
@@ -91,6 +92,14 @@ class PreflightTests(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(report.errors, [])
         self.assertEqual(report.warnings, [])
+
+    def test_camera_stale_timeout_must_be_positive(self):
+        report = validate(base_config(CAMERA_STALE_TIMEOUT=0))
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "CAMERA_STALE_TIMEOUT", settings_with_issue(report, "error")
+        )
 
     def test_non_numeric_threshold_is_an_error(self):
         report = validate(base_config(CONFIDENCE_THRESHOLD="high"))

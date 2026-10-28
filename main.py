@@ -422,6 +422,7 @@ def main():
         last_command = None
         collect_start_time = None
         is_collecting = False
+        camera_stale = False
 
         # 方案 20：捡球成功计数
         collected_count = 0
@@ -440,6 +441,72 @@ def main():
                 break
 
             stats.tick()
+
+            # 相机看门狗：USB 驱动卡住时 cap.read() 仍会返回旧帧，
+            # 拿旧画面继续追球会一直按过期目标行驶，必须先停车等待新帧。
+            if camera.is_stale():
+                age = camera.frame_age() or 0.0
+                first_stale_frame = not camera_stale
+                camera_stale = True
+
+                if first_stale_frame:
+                    print(
+                        "Camera stale (%.1fs without a new frame), stopping."
+                        % age
+                    )
+                    robot.stop()
+                    robot.collect_off()
+                    last_command = "STOP"
+                    stats.record_camera_stale()
+
+                    if run_logger is not None:
+                        run_logger.event("camera_stale", age=round(age, 2))
+
+                warning_frame = frame.copy()
+                cv2.putText(
+                    warning_frame,
+                    "CAMERA STALE %.1fs - STOPPED" % age,
+                    (30, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.2,
+                    (0, 0, 255),
+                    3
+                )
+
+                if web_server is not None:
+                    web_server.update(
+                        warning_frame,
+                        _web_status(
+                            {"action": "CAMERA_STALE"}, collected_count,
+                            None, None, "clear", decision_maker, stats
+                        )
+                    )
+
+                # 只在进入卡死状态时落一帧日志，避免冻结期间刷爆日志目录
+                if first_stale_frame and run_logger is not None:
+                    run_logger.log_frame(
+                        warning_frame,
+                        _log_record(
+                            {"action": "CAMERA_STALE"}, None, 0, None,
+                            None, None, collected_count, "clear"
+                        )
+                    )
+
+                cv2.imshow("Robot Camera YOLO", warning_frame)
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
+                # 卡死期间没有推理，限制循环频率避免空转
+                time.sleep(0.1)
+                continue
+
+            if camera_stale:
+                camera_stale = False
+                print("Camera stream recovered.")
+
+                if run_logger is not None:
+                    run_logger.event("camera_recovered")
 
             # 地面模式：先去畸变再检测（与标定流程一致）
             if projection is not None:

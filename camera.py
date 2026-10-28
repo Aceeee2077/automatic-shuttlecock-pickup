@@ -3,7 +3,13 @@ import time
 
 import cv2
 
-from config import CAMERA_INDEX, FRAME_WIDTH, FRAME_HEIGHT
+from camera_watchdog import FrameWatchdog
+from config import (
+    CAMERA_INDEX,
+    CAMERA_STALE_TIMEOUT,
+    FRAME_WIDTH,
+    FRAME_HEIGHT
+)
 
 
 class Camera:
@@ -29,6 +35,7 @@ class Camera:
         self.lock = threading.Lock()
         self.frame = None
         self.stopped = False
+        self.watchdog = FrameWatchdog(CAMERA_STALE_TIMEOUT)
 
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
@@ -42,12 +49,15 @@ class Camera:
                 # 读帧失败：短暂等待后重试，多次失败则视为相机断开
                 with self.lock:
                     self.frame = None
+                # 失败时不要空转，否则读失败会占满一个 CPU 核
+                time.sleep(0.02)
                 continue
 
             frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
 
             with self.lock:
                 self.frame = frame
+                self.watchdog.mark_frame()
 
     def read(self, timeout=2.0):
         """取最新一帧；启动后还没读到首帧或相机断开时返回 None。"""
@@ -63,6 +73,14 @@ class Camera:
             time.sleep(0.01)
 
         return None
+
+    def frame_age(self):
+        """距上一帧新画面的秒数；还没收到首帧时返回 None。"""
+        return self.watchdog.frame_age()
+
+    def is_stale(self):
+        """画面超过 CAMERA_STALE_TIMEOUT 没有新帧。"""
+        return self.watchdog.is_stale()
 
     def release(self):
         self.stopped = True

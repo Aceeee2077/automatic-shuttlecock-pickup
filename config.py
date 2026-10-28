@@ -11,6 +11,10 @@ BAUD_RATE = 115200
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
 
+# 相机画面看门狗：超过该秒数没有新帧就判定画面卡死，立即停车
+# （USB 相机偶发驱动卡住但 cap.read() 不报错，会一直返回同一帧）
+CAMERA_STALE_TIMEOUT = 2.0
+
 CENTER_TOLERANCE = 80
 
 # =========================
