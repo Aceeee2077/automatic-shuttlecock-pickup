@@ -6,6 +6,7 @@ import time
 
 import config as app_config
 from preflight import print_report, validate_config
+from session_stats import SessionStats
 
 from config import (
     USE_SERIAL,
@@ -320,18 +321,21 @@ def execute_escape(robot, decision_maker):
 
 
 def _web_status(decision, collected_count, battery_mv, obstacle,
-                obstacle_state, decision_maker):
+                obstacle_state, decision_maker, stats):
     """方案 22：构造推送给 Web 监控的状态字典。"""
     return {
         "mode": "ground" if decision_maker.use_ground else "pixel",
         "action": decision.get("action", "?"),
         "collected": collected_count,
         "battery_mv": battery_mv,
+        "battery_low_mv": BATTERY_LOW_MV,
+        "battery_critical_mv": BATTERY_CRITICAL_MV,
         "obstacle": (
             obstacle.get("cls") if obstacle else None
         ),
         "obstacle_state": obstacle_state,
-        "miss_count": decision_maker.miss_count
+        "miss_count": decision_maker.miss_count,
+        "stats": stats.snapshot()
     }
 
 
@@ -339,6 +343,8 @@ def main():
     camera = None
     robot = None
     run_logger = None
+    web_server = None
+    stats = SessionStats()
 
     # Validate config before opening the camera, model, serial port or any log
     # directory. A bad threshold or missing model should not leave hardware open.
@@ -433,6 +439,8 @@ def main():
                 print("Cannot read frame.")
                 break
 
+            stats.tick()
+
             # 地面模式：先去畸变再检测（与标定流程一致）
             if projection is not None:
                 frame = projection.undistort(frame)
@@ -471,7 +479,7 @@ def main():
                         display_frame,
                         _web_status(
                             decision, collected_count, battery_mv,
-                            obstacle, obstacle_state, decision_maker
+                            obstacle, obstacle_state, decision_maker, stats
                         )
                     )
 
@@ -536,6 +544,7 @@ def main():
                     if collect_failed:
                         # 失败：就地重试（重新驶向同一位置触发 COLLECT）
                         print("Collect failed, retrying.")
+                        stats.record_collect_failure()
 
                         if run_logger is not None:
                             run_logger.event("collect_failed")
@@ -544,6 +553,8 @@ def main():
                     elif next_target is not None:
                         # 方案 10：找到下一个目标，直接切换焦点驶向它
                         print("Next target found, switching.")
+                        stats.record_collect_success()
+                        stats.record_target_switch()
 
                         if run_logger is not None:
                             run_logger.event("collect_success",
@@ -554,6 +565,7 @@ def main():
                         last_command = None
                     else:
                         collected_count += 1
+                        stats.record_collect_success()
 
                         if run_logger is not None:
                             run_logger.event("collect_success",
@@ -569,6 +581,7 @@ def main():
                 # 方案 19：障碍物挡路处理
                 if obstacle_state == "giveup":
                     # 持续遮挡超时：放弃该目标，进入搜索
+                    stats.record_obstacle_giveup()
 
                     if run_logger is not None:
                         run_logger.event("obstacle_giveup")
@@ -596,11 +609,14 @@ def main():
                     collect_start_time = time.time()
                     is_collecting = True
                     last_command = "COLLECT_ON"
+                    stats.record_collect_start()
 
                     if run_logger is not None:
                         run_logger.event("collect_start")
                 elif decision["action"] == "ESCAPE":
                     # 方案 27：判定卡死，执行脱困（后退 + 原地转）
+                    stats.record_escape()
+
                     if run_logger is not None:
                         run_logger.event("escape")
 
@@ -634,7 +650,7 @@ def main():
                     display_frame,
                     _web_status(
                         decision, collected_count, battery_mv,
-                        obstacle, obstacle_state, decision_maker
+                        obstacle, obstacle_state, decision_maker, stats
                     )
                 )
 
@@ -651,6 +667,9 @@ def main():
     except KeyboardInterrupt:
         print("\nStopped by user (Ctrl+C).")
     finally:
+        # 无论正常退出还是 Ctrl+C 中断，都打印本次运行统计
+        stats.print_summary()
+
         # 无论正常退出还是 Ctrl+C 中断，都确保机器人停止、资源释放
         if robot is not None:
             robot.stop()

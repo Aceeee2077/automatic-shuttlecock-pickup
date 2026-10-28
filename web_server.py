@@ -4,7 +4,7 @@ Web 远程监控。
 用 Python 标准库 http.server 实现（无第三方依赖）：
 - GET /        ：监控页面（单文件 HTML，内嵌状态轮询 + MJPEG 显示）
 - GET /video   ：MJPEG 视频流
-- GET /status  ：状态 JSON（动作 / 捡球计数 / 电量 / 避障状态）
+- GET /status  ：状态 JSON（动作 / 捡球计数 / 电量 / 避障状态 / 运行统计）
 
 main.py 每帧调用 update(display_frame, status_dict) 写入最新帧和状态，
 推流线程只在浏览器请求时编码 JPEG，不影响主循环实时性。
@@ -130,8 +130,11 @@ PAGE_HTML = """<!DOCTYPE html>
          font-family: Consolas, monospace; text-align: center; }
   h1 { font-size: 20px; padding: 12px; }
   img { max-width: 96%; border: 1px solid #333; }
-  #bar { display: flex; justify-content: center; gap: 28px;
+  #bar { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 28px;
          padding: 10px; font-size: 17px; }
+  #stats { display: flex; flex-wrap: wrap; justify-content: center;
+           gap: 10px 24px; padding: 4px 10px 14px; font-size: 15px;
+           color: #9c9; }
   .ok { color: #6f6; } .warn { color: #fd5; } .bad { color: #f55; }
 </style>
 </head>
@@ -146,21 +149,41 @@ PAGE_HTML = """<!DOCTYPE html>
   <span id="obstacle">-</span>
   <span id="miss">-</span>
 </div>
+<div id="stats">
+  <span id="uptime">-</span>
+  <span id="fps">-</span>
+  <span id="rate">-</span>
+  <span id="attempts">-</span>
+  <span id="escapes">-</span>
+  <span id="giveups">-</span>
+</div>
 <script>
-function clsBatt(mv) {
-  if (mv == null) return "ok";
-  if (mv <= 10000) return "bad";
-  if (mv <= 10500) return "warn";
+function lowMv(s) { return s.battery_low_mv ?? 10500; }
+function criticalMv(s) { return s.battery_critical_mv ?? 10000; }
+function clsBatt(s) {
+  if (s.battery_mv == null) return "ok";
+  if (s.battery_mv <= criticalMv(s)) return "bad";
+  if (s.battery_mv <= lowMv(s)) return "warn";
   return "ok";
 }
 function clsObstacle(s) {
   if (s === "blocked" || s === "giveup") return "bad";
   return "ok";
 }
+function fmtUptime(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return h + "h" + String(m).padStart(2, "0") + "m";
+  if (m > 0) return m + "m" + String(s).padStart(2, "0") + "s";
+  return s + "s";
+}
 async function poll() {
   try {
     const r = await fetch("/status");
     const s = await r.json();
+    const st = s.stats || {};
     document.getElementById("mode").textContent = "模式: " + (s.mode || "-");
     document.getElementById("action").textContent = "动作: " + (s.action || "-");
     document.getElementById("collected").textContent =
@@ -171,7 +194,7 @@ async function poll() {
       batt.className = "ok";
     } else {
       batt.textContent = "电量: " + (s.battery_mv / 1000).toFixed(2) + "V";
-      batt.className = clsBatt(s.battery_mv);
+      batt.className = clsBatt(s);
     }
     const obs = document.getElementById("obstacle");
     obs.textContent = "避障: " + (s.obstacle_state || "clear")
@@ -179,6 +202,20 @@ async function poll() {
     obs.className = clsObstacle(s.obstacle_state);
     document.getElementById("miss").textContent =
       "丢帧: " + (s.miss_count ?? 0);
+    document.getElementById("uptime").textContent =
+      "运行: " + fmtUptime(st.uptime_s);
+    document.getElementById("fps").textContent =
+      "帧率: " + (st.fps ?? 0).toFixed(1) + " fps";
+    document.getElementById("rate").textContent =
+      "成功率: " + (st.success_rate ?? 0).toFixed(1) + "%";
+    document.getElementById("attempts").textContent =
+      "捡球: " + (st.collect_success ?? 0) + "/"
+      + (st.collect_attempts ?? 0)
+      + " 失败 " + (st.collect_failed ?? 0);
+    document.getElementById("escapes").textContent =
+      "脱困: " + (st.escapes ?? 0);
+    document.getElementById("giveups").textContent =
+      "避障放弃: " + (st.obstacle_giveups ?? 0);
   } catch (e) { /* 服务未就绪时静默重试 */ }
 }
 setInterval(poll, 1000);

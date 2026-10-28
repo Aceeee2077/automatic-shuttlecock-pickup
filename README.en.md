@@ -16,7 +16,8 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 | Pickup confirmation | Visually confirms whether the ball was picked up; retries in place on failure, enters cooldown after too many retries to avoid getting stuck |
 | Obstacle avoidance | A separate YOLO model detects blocking obstacles such as people and backpacks; stops and waits when blocked, gives up the target after a prolonged block |
 | Battery monitoring | The firmware reports battery voltage every second; low-voltage warnings are throttled, critical voltage forces a stop, and the level shows on both screen and web |
-| Web remote monitoring | Built-in MJPEG stream plus a status endpoint — open `http://<ip>:8000` in a browser to view the feed, action, battery, and pickup count remotely |
+| Web remote monitoring | Built-in MJPEG stream plus a status endpoint — open `http://<ip>:8000` in a browser to view the feed, action, battery, pickup count, and live session statistics remotely |
+| Session statistics | Uptime, rolling FPS, pickup attempts/success/failure and success rate, escapes, and obstacle give-ups; shown live on the web page and printed as a summary on exit |
 | Staged approach | In ground mode, within 1 m the robot automatically switches to a creep gear: lower speed with stronger turn gain, then pauses briefly to confirm alignment before picking up — prevents overshooting and improves alignment |
 | Stuck detection & escape | If the target distance stops decreasing while driving, the robot is judged stuck and automatically backs up then turns in place to escape; too many escapes on the same ball triggers a cooldown and skips it |
 | Safe shutdown | Ctrl+C or Q automatically stops the robot, turns off the pickup motor, and releases resources |
@@ -31,6 +32,7 @@ automatic_shuttlecock_pickup
 ├── main.py                  # Main program: main loop, action execution, debug overlay
 ├── config.py                # Centralized configuration (with per-feature switches)
 ├── preflight.py             # Startup checks: value ranges, battery ordering, model/calibration files
+├── session_stats.py         # Run statistics: uptime, FPS, pickup success rate, escapes, give-ups
 ├── camera.py                # Camera: background thread reads frames, keeps the latest only
 ├── detector.py              # YOLO detection + ByteTrack tracking + Kalman smoothing
 ├── kalman_filter.py         # Constant-velocity Kalman filter
@@ -41,6 +43,7 @@ automatic_shuttlecock_pickup
 ├── web_server.py            # Web remote monitoring: MJPEG stream + status JSON (optional)
 ├── camera_calibration.py    # Camera intrinsics calibration script (optional)
 ├── calibrate_homography.py  # Ground homography calibration script (optional)
+├── tests/                   # Offline unit tests (preflight, session statistics)
 ├── requirements.txt
 └── model/
     └── shuttlecock.pt       # YOLO shuttlecock model
