@@ -4,6 +4,9 @@ from pathlib import Path
 import cv2
 import time
 
+import config as app_config
+from preflight import print_report, validate_config
+
 from config import (
     USE_SERIAL,
     SERIAL_PORT,
@@ -337,6 +340,14 @@ def main():
     robot = None
     run_logger = None
 
+    # Validate config before opening the camera, model, serial port or any log
+    # directory. A bad threshold or missing model should not leave hardware open.
+    report = validate_config(
+        app_config, base_dir=Path(__file__).resolve().parent
+    )
+    if not print_report(report):
+        return
+
     try:
         try:
             camera = Camera()
@@ -380,6 +391,8 @@ def main():
 
         decision_maker = DecisionMaker(FRAME_WIDTH, projection=projection)
 
+        mode = "ground projection" if decision_maker.use_ground else "pixel"
+
         # 方案 43：运行日志（可选），每帧 JPEG + JSON 落盘供离线回放
         if USE_RUN_LOGGER:
             from run_logger import RunLogger
@@ -410,7 +423,6 @@ def main():
         # 方案 20：低电压报警节流（避免每帧刷屏）
         last_low_batt_warn = 0.0
 
-        mode = "ground projection" if decision_maker.use_ground else "pixel"
         print(f"Program started with YOLO detector ({mode} mode).")
         print("Press Q to quit.")
 

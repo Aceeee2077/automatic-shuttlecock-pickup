@@ -21,6 +21,7 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 | Stuck detection & escape | If the target distance stops decreasing while driving, the robot is judged stuck and automatically backs up then turns in place to escape; too many escapes on the same ball triggers a cooldown and skips it |
 | Safe shutdown | Ctrl+C or Q automatically stops the robot, turns off the pickup motor, and releases resources |
 | Serial watchdog | Firmware-side 500ms command timeout auto-stop; heartbeat keeps the pickup motor alive during collection |
+| Startup preflight | Checks `config.py` value ranges, battery threshold ordering, model and calibration files before startup; errors block startup, warnings let it continue |
 
 ## Project Structure
 
@@ -29,6 +30,7 @@ automatic_shuttlecock_pickup
 │
 ├── main.py                  # Main program: main loop, action execution, debug overlay
 ├── config.py                # Centralized configuration (with per-feature switches)
+├── preflight.py             # Startup checks: value ranges, battery ordering, model/calibration files
 ├── camera.py                # Camera: background thread reads frames, keeps the latest only
 ├── detector.py              # YOLO detection + ByteTrack tracking + Kalman smoothing
 ├── kalman_filter.py         # Constant-velocity Kalman filter
@@ -63,6 +65,14 @@ python main.py
 - Press `Q` to quit, or Ctrl+C to interrupt (both stop the robot automatically)
 - Serial is disabled by default (`USE_SERIAL = False`): the program only shows the video feed and control outputs, which is handy for tuning vision first
 - For real runs, set `USE_SERIAL = True` and `SERIAL_PORT` in `config.py`
+
+Startup runs `preflight.py` first. Out-of-range values, `BATTERY_CRITICAL_MV` not below `BATTERY_LOW_MV`, a missing model, or a missing ground homography block startup. Missing drive calibration and obstacle-model reuse only print warnings. Camera, serial and log directories are not opened until the checks pass.
+
+Run the offline unit tests (no camera, Arduino, or model inference required):
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## Configuration
 

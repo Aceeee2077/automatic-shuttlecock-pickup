@@ -21,6 +21,7 @@
 | 卡死检测脱困 | 持续行驶但目标距离不缩小判卡死，自动后退 + 原地转脱困；同目标脱困超限进入冷却跳过该球 |
 | 安全退出 | Ctrl+C 或按 Q 退出时自动停车、关闭捡球机构、释放资源 |
 | 串口看门狗 | 固件侧 500ms 无指令自动停车，捡球期间发心跳保活 |
+| 启动自检 | 启动前校验 `config.py` 数值范围、电量阈值顺序、模型与标定文件；错误直接阻止启动，警告继续运行 |
 
 ## 项目结构
 
@@ -29,6 +30,7 @@ automatic_shuttlecock_pickup
 │
 ├── main.py                  # 主程序：主循环、动作执行、调试画面
 ├── config.py                # 全部参数集中配置（含各方案开关）
+├── preflight.py             # 启动自检：参数范围、电量阈值、模型/标定文件
 ├── camera.py                # 相机：后台线程读帧，只保留最新帧
 ├── detector.py              # YOLO 检测 + ByteTrack 跟踪 + Kalman 平滑
 ├── kalman_filter.py         # 匀速模型 Kalman 滤波器
@@ -63,6 +65,14 @@ python main.py
 - 按 `Q` 退出，或 Ctrl+C 中断（两者都会自动停车）
 - 默认不连串口（`USE_SERIAL = False`），只显示画面和控制量，方便先调试视觉
 - 实车运行时在 `config.py` 中设置 `USE_SERIAL = True` 和 `SERIAL_PORT`
+
+启动时会先运行 `preflight.py`：数值越界、`BATTERY_CRITICAL_MV` 不低于 `BATTERY_LOW_MV`、模型或地面单应文件缺失等错误会直接阻止启动；未做直行标定、障碍物模型复用羽毛球模型等情况只打印警告。这样不会在配置有误时先打开相机、串口或日志目录。
+
+运行离线单元测试（不需要相机、Arduino 或模型推理）：
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## 配置说明
 
