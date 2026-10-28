@@ -15,6 +15,8 @@ from pathlib import Path
 
 import cv2
 
+from run_retention import prune_runs
+
 
 class RunLogger:
     """后台线程异步落盘，不阻塞主循环。
@@ -27,7 +29,13 @@ class RunLogger:
     """
 
     def __init__(self, root_dir="runs/replay", jpeg_quality=85,
-                 every_n_frames=1):
+                 every_n_frames=1, keep_runs=0):
+        # 先按保留策略清理旧日志，再创建本次目录，避免把本次目录算进去
+        removed = prune_runs(root_dir, keep_runs)
+
+        if removed:
+            print(f"Pruned {len(removed)} old run log(s).")
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_dir = Path(root_dir) / f"run_{ts}"
         self.frames_dir = self.run_dir / "frames"

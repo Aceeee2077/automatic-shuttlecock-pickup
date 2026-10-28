@@ -18,6 +18,8 @@ An automatic shuttlecock pickup robot built on YOLO vision and an Arduino differ
 | Battery monitoring | The firmware reports battery voltage every second; low-voltage warnings are throttled, critical voltage forces a stop, and the level shows on both screen and web |
 | Web remote monitoring | Built-in MJPEG stream plus a status endpoint — open `http://<ip>:8000` in a browser to view the feed, action, battery, pickup count, and live session statistics remotely |
 | Session statistics | Uptime, rolling FPS, pickup attempts/success/failure and success rate, escapes, and obstacle give-ups; shown live on the web page and printed as a summary on exit |
+| Run logging | Per-frame JPEG + JSONL under `runs/replay/run_<timestamp>/` with a separate event stream; replay offline with `replay_viewer.py` |
+| Log retention | Keeps only the newest `RUN_LOG_KEEP_RUNS` runs at startup and removes older ones, so long tuning sessions cannot fill the disk |
 | Staged approach | In ground mode, within 1 m the robot automatically switches to a creep gear: lower speed with stronger turn gain, then pauses briefly to confirm alignment before picking up — prevents overshooting and improves alignment |
 | Stuck detection & escape | If the target distance stops decreasing while driving, the robot is judged stuck and automatically backs up then turns in place to escape; too many escapes on the same ball triggers a cooldown and skips it |
 | Safe shutdown | Ctrl+C or Q automatically stops the robot, turns off the pickup motor, and releases resources |
@@ -43,6 +45,10 @@ automatic_shuttlecock_pickup
 ├── robot_controller.py      # Serial command wrapper + background firmware report parsing (battery)
 ├── arduino_controller.ino   # Arduino firmware: PWM differential drive + watchdog + battery reporting
 ├── web_server.py            # Web remote monitoring: MJPEG stream + status JSON (optional)
+├── run_logger.py            # Run logging: per-frame JPEG + JSONL (optional)
+├── run_retention.py         # Log retention: keep the newest N runs
+├── replay_viewer.py         # Offline replay viewer (optional)
+├── calibrate_drive.py       # Straight-line drive calibration script (optional)
 ├── camera_calibration.py    # Camera intrinsics calibration script (optional)
 ├── calibrate_homography.py  # Ground homography calibration script (optional)
 ├── tests/                   # Offline unit tests (preflight, session statistics)
@@ -109,6 +115,10 @@ All parameters live in `config.py`. Common ones:
 | `USE_WEB_SERVER` | `False` | Web remote monitoring switch |
 | `WEB_SERVER_PORT` | `8000` | Web monitoring port |
 | `WEB_JPEG_QUALITY` | `70` | Web stream JPEG quality (1–100) |
+| `USE_RUN_LOGGER` | `True` | Run logging switch |
+| `RUN_LOG_DIR` | `"runs/replay"` | Run log root directory |
+| `RUN_LOG_EVERY_N_FRAMES` | `1` | Store one frame every N frames; raise it if disk space is tight |
+| `RUN_LOG_KEEP_RUNS` | `10` | Keep the newest N runs; `0` disables cleanup |
 | `USE_STAGED_APPROACH` | `True` | Staged approach switch (ground mode only) |
 | `STAGED_NEAR_DISTANCE_M` | `1.0` | Near-range creep-gear distance threshold (meters) |
 | `STAGED_NEAR_SPEED` | `60` | Max creep-gear forward speed (PWM) |

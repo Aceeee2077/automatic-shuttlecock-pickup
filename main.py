@@ -34,6 +34,7 @@ from config import (
     RUN_LOG_DIR,
     RUN_LOG_JPEG_QUALITY,
     RUN_LOG_EVERY_N_FRAMES,
+    RUN_LOG_KEEP_RUNS,
     USE_DRIVE_CALIBRATION,
     DRIVE_CALIBRATION_PATH
 )
@@ -406,7 +407,8 @@ def main():
             run_logger = RunLogger(
                 root_dir=RUN_LOG_DIR,
                 jpeg_quality=RUN_LOG_JPEG_QUALITY,
-                every_n_frames=RUN_LOG_EVERY_N_FRAMES
+                every_n_frames=RUN_LOG_EVERY_N_FRAMES,
+                keep_runs=RUN_LOG_KEEP_RUNS
             )
             run_logger.event("run_config", mode=mode)
 

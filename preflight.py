@@ -227,6 +227,14 @@ def validate_config(cfg, base_dir=".", file_exists=None):
         if not str(getattr(cfg, "RUN_LOG_DIR", "") or "").strip():
             report.error("RUN_LOG_DIR", "cannot be empty")
 
+        keep_runs = _number(report, cfg, "RUN_LOG_KEEP_RUNS", 0, 10000)
+
+        if keep_runs is not None and int(keep_runs) != keep_runs:
+            report.error(
+                "RUN_LOG_KEEP_RUNS",
+                "must be a whole number, got %s" % keep_runs
+            )
+
     # ---- model and optional drive calibration ----
     model_path = getattr(cfg, "YOLO_MODEL_PATH", "")
 

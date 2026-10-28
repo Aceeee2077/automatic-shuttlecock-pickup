@@ -61,6 +61,7 @@ def base_config(**overrides):
         USE_RUN_LOGGER=True,
         RUN_LOG_JPEG_QUALITY=85,
         RUN_LOG_EVERY_N_FRAMES=1,
+        RUN_LOG_KEEP_RUNS=10,
         RUN_LOG_DIR="runs/replay",
         YOLO_MODEL_PATH="model/shuttlecock.pt",
         USE_DRIVE_CALIBRATION=True,
@@ -186,6 +187,12 @@ class PreflightTests(unittest.TestCase):
         self.assertIn(
             "RUN_LOG_EVERY_N_FRAMES", settings_with_issue(report, "error")
         )
+
+    def test_keep_runs_must_be_whole(self):
+        report = validate(base_config(RUN_LOG_KEEP_RUNS=2.5))
+
+        self.assertFalse(report.ok)
+        self.assertIn("RUN_LOG_KEEP_RUNS", settings_with_issue(report, "error"))
 
     def test_print_report_returns_startup_decision(self):
         out = io.StringIO()

@@ -18,6 +18,8 @@
 | 电量监测 | 固件每秒上报电池电压，低电压报警节流，严重低电压自动停车，画面与网页同步显示电量 |
 | Web 远程监控 | 内置 MJPEG 推流 + 状态接口，浏览器打开 `http://<ip>:8000` 远程查看画面、动作、电量、捡球计数与本次运行统计 |
 | 运行统计 | 运行时长、滚动帧率、捡球尝试/成功/失败与成功率、脱困次数、避障放弃次数；网页实时显示，退出时在终端打印本次汇总 |
+| 运行日志 | 每帧 JPEG + JSONL 落到 `runs/replay/run_<时间戳>/`，关键事件单独记录，可用 `replay_viewer.py` 离线回放 |
+| 日志保留 | 启动时只保留最近 `RUN_LOG_KEEP_RUNS` 次运行日志，旧目录自动删除，避免长时间调参撑满磁盘 |
 | 三段式接近 | 地面模式下近距（< 1 米）自动切换蠕行档：低速 + 更强转向增益，到位后暂停观察确认落位再捡球，防冲过、对准更准 |
 | 卡死检测脱困 | 持续行驶但目标距离不缩小判卡死，自动后退 + 原地转脱困；同目标脱困超限进入冷却跳过该球 |
 | 安全退出 | Ctrl+C 或按 Q 退出时自动停车、关闭捡球机构、释放资源 |
@@ -43,6 +45,10 @@ automatic_shuttlecock_pickup
 ├── robot_controller.py      # 串口指令封装 + 后台解析固件上报（电量）
 ├── arduino_controller.ino   # Arduino 固件：PWM 差速 + 看门狗 + 电量上报
 ├── web_server.py            # Web 远程监控：MJPEG 推流 + 状态 JSON（可选）
+├── run_logger.py            # 运行日志：每帧 JPEG + JSONL 落盘（可选）
+├── run_retention.py         # 日志保留：只保留最近 N 次运行
+├── replay_viewer.py         # 离线回放查看器（可选）
+├── calibrate_drive.py       # 直行标定脚本（可选）
 ├── camera_calibration.py    # 相机内参标定脚本（可选）
 ├── calibrate_homography.py  # 地面单应矩阵标定脚本（可选）
 ├── tests/                   # 离线单元测试（启动自检、运行统计）
@@ -109,6 +115,10 @@ python -m unittest discover -s tests -v
 | `USE_WEB_SERVER` | `False` | Web 远程监控开关 |
 | `WEB_SERVER_PORT` | `8000` | Web 监控端口 |
 | `WEB_JPEG_QUALITY` | `70` | Web 推流 JPEG 质量（1~100） |
+| `USE_RUN_LOGGER` | `True` | 运行日志开关 |
+| `RUN_LOG_DIR` | `"runs/replay"` | 运行日志根目录 |
+| `RUN_LOG_EVERY_N_FRAMES` | `1` | 每 N 帧存一帧，磁盘紧张可调大 |
+| `RUN_LOG_KEEP_RUNS` | `10` | 保留最近 N 次运行日志，`0` 表示不清理 |
 | `USE_STAGED_APPROACH` | `True` | 三段式接近开关（仅地面模式） |
 | `STAGED_NEAR_DISTANCE_M` | `1.0` | 近距蠕行档距离阈值（米） |
 | `STAGED_NEAR_SPEED` | `60` | 蠕行档最大前进速度（PWM） |
